@@ -11,8 +11,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::meeting::{
-    MAX_RECEIPT_BYTES, MeetingError, MeetingRecord, read_private_bytes, resolve_artifact,
-    verify_artifact_ref,
+    read_private_bytes, resolve_artifact, verify_artifact_ref, MeetingError, MeetingRecord,
+    MAX_RECEIPT_BYTES,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -53,6 +53,44 @@ pub struct CaptureQualityProjection {
     pub state: CaptureQualityState,
     pub observations: Vec<CaptureQualityObservation>,
     pub message: String,
+}
+
+/// Reader-safe projection of whether a recording-device identity was retained.
+///
+/// This is intentionally separate from recording-quality guidance. `Identified`
+/// means only that Yawn verified a microphone identity was recorded in the
+/// capture receipt. It does not say that the recorded microphone was the input
+/// the person intended to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecordingDeviceState {
+    Identified,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RecordingDeviceAction {
+    CheckAudioInput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordingDeviceProjection {
+    pub state: RecordingDeviceState,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_action: Option<RecordingDeviceAction>,
+}
+
+impl RecordingDeviceProjection {
+    fn unknown(message: impl Into<String>) -> Self {
+        Self {
+            state: RecordingDeviceState::Unknown,
+            message: message.into(),
+            next_action: Some(RecordingDeviceAction::CheckAudioInput),
+        }
+    }
 }
 
 impl CaptureQualityProjection {
@@ -199,9 +237,81 @@ pub fn project_capture_quality(
     })
 }
 
+/// Returns the closed recording-device context only after the retained capture
+/// receipt and microphone audio still verify. No device metadata crosses this
+/// boundary.
+pub fn project_recording_device(
+    meeting_dir: &Path,
+    meeting: &MeetingRecord,
+) -> Result<RecordingDeviceProjection, MeetingError> {
+    let Some(session) = meeting.artifacts.capture_session.as_ref() else {
+        return Ok(RecordingDeviceProjection::unknown(
+            "Yawn could not verify that a microphone identity was recorded for this meeting.",
+        ));
+    };
+    let Some(microphone) = meeting.artifacts.microphone_audio.as_ref() else {
+        return Ok(RecordingDeviceProjection::unknown(
+            "Yawn could not verify that a microphone identity was recorded for this meeting.",
+        ));
+    };
+
+    // This is the same retained receipt/audio binding checked before quality
+    // guidance is projected. Changed bytes remain an integrity error, rather
+    // than becoming a potentially misleading device result.
+    verify_artifact_ref(meeting_dir, session)?;
+    verify_artifact_ref(meeting_dir, microphone)?;
+    let bytes = read_private_bytes(
+        &resolve_artifact(meeting_dir, &session.relative_path)?,
+        MAX_RECEIPT_BYTES,
+    )?;
+    let receipt: Value = serde_json::from_slice(&bytes)?;
+
+    let Some(receipt_object) = receipt.as_object() else {
+        return Ok(unknown_device_projection());
+    };
+    if receipt_object.get("schema").and_then(Value::as_str) != Some("capture-session/2") {
+        return Ok(unknown_device_projection());
+    }
+    let Some(device) = receipt_object.get("microphone") else {
+        return Ok(RecordingDeviceProjection::unknown(
+            "This meeting predates persisted recording-device evidence.",
+        ));
+    };
+    let Some(device) = device.as_object() else {
+        return Ok(unknown_device_projection());
+    };
+    if device
+        .keys()
+        .any(|key| !matches!(key.as_str(), "schema" | "index" | "name" | "hostapi"))
+        || device.get("schema").and_then(Value::as_str) != Some("capture-microphone/1")
+        || device.get("index").and_then(Value::as_u64).is_none()
+        || device
+            .get("hostapi")
+            .is_some_and(|hostapi| hostapi.as_u64().is_none())
+        || device
+            .get("name")
+            .and_then(Value::as_str)
+            .is_none_or(|name| name.trim().is_empty())
+    {
+        return Ok(unknown_device_projection());
+    }
+
+    Ok(RecordingDeviceProjection {
+        state: RecordingDeviceState::Identified,
+        message: "Yawn verified that a microphone identity was recorded for this meeting. This does not confirm it was the audio input you intended to use.".into(),
+        next_action: None,
+    })
+}
+
 fn malformed_projection() -> CaptureQualityProjection {
     CaptureQualityProjection::unavailable(
         "Recording-quality evidence is present but could not be verified.",
+    )
+}
+
+fn unknown_device_projection() -> RecordingDeviceProjection {
+    RecordingDeviceProjection::unknown(
+        "Yawn could not verify that a microphone identity was recorded for this meeting.",
     )
 }
 
@@ -214,8 +324,8 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::meeting::{
-        AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts, MeetingLifecycle,
-        MeetingRecord, MeetingSchema, artifact_ref, retention_policy_sha256,
+        artifact_ref, retention_policy_sha256, AudioRetention, AudioRetentionRule, AudioState,
+        MeetingArtifacts, MeetingLifecycle, MeetingRecord, MeetingSchema,
     };
 
     fn private_directory(path: &Path) {
@@ -347,5 +457,114 @@ mod tests {
         let meeting_dir = temporary.path().join("meeting-a");
         private_file(&meeting_dir.join("capture/session.json"), b"changed");
         assert!(project_capture_quality(&meeting_dir, &meeting).is_err());
+    }
+
+    #[test]
+    fn projects_only_closed_recording_device_context() {
+        let (temporary, meeting) = fixture();
+        let projection =
+            project_recording_device(&temporary.path().join("meeting-a"), &meeting).unwrap();
+
+        assert_eq!(projection.state, RecordingDeviceState::Identified);
+        assert_eq!(projection.next_action, None);
+        assert!(projection.message.contains("Yawn verified"));
+        assert!(projection.message.contains("intended to use"));
+        let encoded = serde_json::to_value(&projection).unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::json!({
+                "state": "identified",
+                "message": "Yawn verified that a microphone identity was recorded for this meeting. This does not confirm it was the audio input you intended to use."
+            })
+        );
+        let serialized = encoded.to_string();
+        for private_value in [
+            "Private device name",
+            "capture/mic.wav",
+            "sha256",
+            "index",
+            "hostapi",
+            "duration_s",
+            "ignored",
+        ] {
+            assert!(!serialized.contains(private_value));
+        }
+    }
+
+    #[test]
+    fn legacy_unknown_or_extra_device_evidence_projects_unknown_with_closed_action() {
+        let (temporary, mut meeting) = fixture();
+        let meeting_dir = temporary.path().join("meeting-a");
+        let session_path = meeting_dir.join("capture/session.json");
+        let mut receipt: Value = serde_json::from_slice(&fs::read(&session_path).unwrap()).unwrap();
+        receipt.as_object_mut().unwrap().remove("microphone");
+        private_file(&session_path, &serde_json::to_vec(&receipt).unwrap());
+        meeting.artifacts.capture_session =
+            Some(artifact_ref(&meeting_dir, "capture/session.json").unwrap());
+
+        let legacy = project_recording_device(&meeting_dir, &meeting).unwrap();
+        assert_eq!(legacy.state, RecordingDeviceState::Unknown);
+        assert_eq!(
+            legacy.next_action,
+            Some(RecordingDeviceAction::CheckAudioInput)
+        );
+        assert!(legacy.message.contains("predates"));
+        assert_eq!(
+            serde_json::to_value(&legacy).unwrap()["nextAction"],
+            "check-audio-input"
+        );
+
+        receipt["microphone"] = serde_json::json!({
+            "schema": "capture-microphone/1",
+            "index": 4,
+            "name": "Private device name",
+            "hostapi": "Private host API"
+        });
+        private_file(&session_path, &serde_json::to_vec(&receipt).unwrap());
+        meeting.artifacts.capture_session =
+            Some(artifact_ref(&meeting_dir, "capture/session.json").unwrap());
+        let unrecognized = project_recording_device(&meeting_dir, &meeting).unwrap();
+        assert_eq!(unrecognized.state, RecordingDeviceState::Unknown);
+        let serialized = serde_json::to_string(&unrecognized).unwrap();
+        assert!(!serialized.contains("Private device name"));
+        assert!(!serialized.contains("Private host API"));
+
+        receipt["microphone"] = serde_json::json!({
+            "schema": "capture-microphone/1",
+            "index": 4,
+            "name": "Private device name",
+            "hostapi": 2
+        });
+        private_file(&session_path, &serde_json::to_vec(&receipt).unwrap());
+        meeting.artifacts.capture_session =
+            Some(artifact_ref(&meeting_dir, "capture/session.json").unwrap());
+        let canonical = project_recording_device(&meeting_dir, &meeting).unwrap();
+        assert_eq!(canonical.state, RecordingDeviceState::Identified);
+        assert!(!serde_json::to_string(&canonical)
+            .unwrap()
+            .contains("hostapi"));
+
+        receipt["microphone"]["unrecognized"] = serde_json::json!(true);
+        private_file(&session_path, &serde_json::to_vec(&receipt).unwrap());
+        meeting.artifacts.capture_session =
+            Some(artifact_ref(&meeting_dir, "capture/session.json").unwrap());
+        let extra = project_recording_device(&meeting_dir, &meeting).unwrap();
+        assert_eq!(extra.state, RecordingDeviceState::Unknown);
+        assert!(!serde_json::to_string(&extra)
+            .unwrap()
+            .contains("unrecognized"));
+    }
+
+    #[test]
+    fn changed_session_or_microphone_bytes_fail_before_device_projection() {
+        let (temporary, meeting) = fixture();
+        let meeting_dir = temporary.path().join("meeting-a");
+        private_file(&meeting_dir.join("capture/mic.wav"), b"changed");
+        assert!(project_recording_device(&meeting_dir, &meeting).is_err());
+
+        let (temporary, meeting) = fixture();
+        let meeting_dir = temporary.path().join("meeting-a");
+        private_file(&meeting_dir.join("capture/session.json"), b"changed");
+        assert!(project_recording_device(&meeting_dir, &meeting).is_err());
     }
 }
