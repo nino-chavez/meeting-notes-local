@@ -1,5 +1,33 @@
 # Yawn distribution runbook
 
+## 0.5.8 release receipt
+
+**0.5.8 was released on 2026-08-16 with summary-first local meeting notes.**
+The artifact was built from release-branch commit
+`245fd16bf8aa51a262857440b004f6731fd69cff`; draft PR #72 carries that exact
+source for review.
+
+The signed artifact is `Yawn-0.5.8-macos-arm64.dmg`, 345,630,762 bytes, with
+SHA-256 `207b430d7499b19e44dcc5e68d997e9e9e046eeb5964e48ccc9d40f70d19216d`.
+Apple accepted app submission `cd1407ba-e36a-4f89-b4db-970c44535361` and DMG
+submission `f4855522-06c5-4d24-ba81-379700e33d8f`. Both artifacts were stapled,
+Gatekeeper accepted them with `source=Notarized Developer ID`, and the
+independent signed-release verifier passed with 169 arm64-compatible Mach-O
+files under the `internal-alpha` admission.
+
+The public installer URL returned 200 with the recorded byte count, disk-image
+content type, immutable cache control, and a full streamed SHA-256 match. The
+six immutable note-model objects also returned 200 with the exact byte counts
+in the signed catalog. The 8.06 GB note model remains a separate, verified
+download; it is not embedded in the DMG.
+
+Landing-site commit `310dd93` was manually deployed to Cloudflare Pages as
+production deployment `4b062c2f-a3db-4d24-ba52-61ceb809e88f`. Both that
+immutable deployment and `yawn-site.pages.dev` displayed version 0.5.8, the
+exact public installer URL and checksum, the summary-first note description,
+and the separate note-model disclosure. Draft PR #2 carries the site source
+for review. No superseded installer was deleted during this release.
+
 ## 0.5.7 release receipt
 
 **0.5.7 was released on 2026-08-12 with speech-model management in Settings.**
