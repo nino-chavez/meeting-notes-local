@@ -61,13 +61,28 @@ if [[ "$cmd" == "preflight" ]]; then
   exit "$status"
 fi
 
-[[ "$cmd" == "run" || "$cmd" == "run-alpha" ]] \
-  || die "usage: sign-notarize.sh [preflight|run|run-alpha] [app]"
-APP="${1:-$ROOT/target/release/bundle/macos/$VOLNAME.app}"
+LOCAL_ONLY=0
+if [[ "$cmd" == "local" ]]; then
+  LOCAL_ONLY=1
+  [[ "${1:-}" == "--admission" ]] \
+    || die "usage: sign-notarize.sh local --admission [product|internal-alpha] [app]"
+  shift
+  ADMISSION="${1:-}"
+  [[ "$ADMISSION" == "product" || "$ADMISSION" == "internal-alpha" ]] \
+    || die "local admission must be product or internal-alpha"
+  shift
+  APP="${1:-$ROOT/target/release/bundle/macos/$VOLNAME.app}"
+elif [[ "$cmd" == "run" || "$cmd" == "run-alpha" ]]; then
+  APP="${1:-$ROOT/target/release/bundle/macos/$VOLNAME.app}"
+else
+  die "usage: sign-notarize.sh [preflight|run|run-alpha|local] [app]"
+fi
 [[ -d "$APP" ]] || die "no app bundle at $APP"
 [[ -f "$PYTHON_ENTITLEMENTS" ]] || die "missing Python entitlements"
 [[ -f "$CAPTURE_ENTITLEMENTS" ]] || die "missing capture entitlements"
-ADMISSION="product"
+if [[ "$LOCAL_ONLY" == "0" ]]; then
+  ADMISSION="product"
+fi
 if [[ "$cmd" == "run-alpha" ]]; then
   ADMISSION="internal-alpha"
 fi
@@ -75,8 +90,10 @@ fi
 "$ROOT/scripts/verify-release-bundle.py" "$APP" --admission "$ADMISSION"
 IDENTITY="$(identity)"
 [[ -n "$IDENTITY" ]] || die "Developer ID Application identity for Team $EXPECTED_TEAM_ID is unavailable"
-xcrun notarytool history --keychain-profile "$PROFILE" --output-format json \
-  >/dev/null 2>&1 || die "notary profile $PROFILE is missing or rejected"
+if [[ "$LOCAL_ONLY" == "0" ]]; then
+  xcrun notarytool history --keychain-profile "$PROFILE" --output-format json \
+    >/dev/null 2>&1 || die "notary profile $PROFILE is missing or rejected"
+fi
 echo "identity: $IDENTITY"
 
 STAGE="$(mktemp -d /tmp/local-meeting-notes-sign.XXXXXX)"
@@ -146,6 +163,11 @@ for attempt in 1 2 3 4 5 6; do
   fi
 done
 [[ "$verified" == "1" ]] || die "signed app failed release verification"
+
+if [[ "$LOCAL_ONLY" == "1" ]]; then
+  echo "DONE: locally signed and verified app (not notarized or packaged)"
+  exit 0
+fi
 
 echo "== notarizing app"
 ditto -c -k --keepParent "$APP" "$STAGE/app.zip"

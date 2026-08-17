@@ -96,6 +96,30 @@ class DistributionToolingTests(unittest.TestCase):
         self.assertIn('--identifier "$PYTHON_SIGNING_IDENTIFIER"', signing)
         self.assertIn('--entitlements "$CAPTURE_ENTITLEMENTS"', signing)
 
+    def test_local_signing_mode_requires_admission_and_stops_before_release_steps(self) -> None:
+        signing = source("scripts/sign-notarize.sh")
+        self.assertIn('if [[ "$cmd" == "local" ]]', signing)
+        self.assertIn('[[ "${1:-}" == "--admission" ]]', signing)
+        self.assertIn('[[ "$ADMISSION" == "product" || "$ADMISSION" == "internal-alpha" ]]', signing)
+        self.assertIn('LOCAL_ONLY=1', signing)
+
+        signed_verify = signing.index('[[ "$verified" == "1" ]] || die "signed app failed release verification"')
+        local_exit = signing.index('echo "DONE: locally signed and verified app (not notarized or packaged)"')
+        app_submit = signing.index('notarytool submit "$STAGE/app.zip"')
+        dmg_build = signing.index('build-dmg.sh" "$APP" "$DMG"')
+        self.assertLess(signed_verify, local_exit)
+        self.assertLess(local_exit, app_submit)
+        self.assertLess(local_exit, dmg_build)
+
+        local_section = signing[signing.index('if [[ "$cmd" == "local" ]]'):local_exit]
+        self.assertIn('--options runtime', local_section)
+        self.assertIn('build_manifest.py', local_section)
+        self.assertIn('verify-release-bundle.py" "$APP" --signed --admission "$ADMISSION"', local_section)
+        self.assertIn(
+            'if [[ "$LOCAL_ONLY" == "0" ]]; then\n  xcrun notarytool history',
+            signing,
+        )
+
         # Every binary that asks macOS for the microphone must be signed with the
         # audio-input entitlement. Shipping a requester without it is not a
         # cosmetic miss: the requester never appears in System Settings, so the
