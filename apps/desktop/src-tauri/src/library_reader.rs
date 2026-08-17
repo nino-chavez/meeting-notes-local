@@ -2502,6 +2502,17 @@ mod tests {
         let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
         let mut reader = LibraryReader::new(fixture.storage, projection);
 
+        let active = HashSet::from([MEETING_ID.to_owned()]);
+        assert_eq!(
+            reader.retain_audio_playback_handle(
+                MEETING_ID,
+                RetainedAudioSource::Microphone,
+                &active,
+            ),
+            None,
+            "an active meeting cannot mint playback authority"
+        );
+
         let handle = reader
             .retain_audio_playback_handle(
                 MEETING_ID,
@@ -2517,6 +2528,22 @@ mod tests {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, microphone);
+
+        let system_handle = reader
+            .retain_audio_playback_handle(
+                MEETING_ID,
+                RetainedAudioSource::System,
+                &HashSet::new(),
+            )
+            .expect("verified retained system audio gets a distinct native handle");
+        let system_grant = reader
+            .authorize_audio_playback(&system_handle, &HashSet::new())
+            .expect("current verified system artifact grants playback");
+        assert_eq!(system_grant.source(), RetainedAudioSource::System);
+        let mut system_file = system_grant.file();
+        let mut system_bytes = Vec::new();
+        system_file.read_to_end(&mut system_bytes).unwrap();
+        assert_eq!(system_bytes, b"system recording");
 
         assert_eq!(
             reader
@@ -2567,7 +2594,7 @@ mod tests {
                 .authorize_audio_playback(&handle, &HashSet::new())
                 .unwrap_err()
                 .state,
-            "stale"
+            "unavailable"
         );
     }
 }
