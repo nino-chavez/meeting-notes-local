@@ -423,6 +423,18 @@ test("only exact backend recovery errors receive contextual actions", () => {
     message: "The local meeting library is unavailable. Reopen the app and try again.",
     action: { action: "refresh-library", label: "Check again" },
   });
+  for (const message of [
+    "Retained audio is unavailable. Reopen Library and try again.",
+    "The transcript changed. Reopen the meeting and try again.",
+    "That speaker group is no longer available. Reopen the meeting and try again.",
+    "The retry candidate changed. Reopen the meeting and try again.",
+  ]) {
+    assert.deepEqual(errorRecoveryPresentation(message, { hasSelectedMeeting: true }), {
+      message,
+      action: { action: "refresh-selected-meeting", label: "Refresh this meeting" },
+    });
+    assert.deepEqual(errorRecoveryPresentation(message), { message, action: null });
+  }
   assert.deepEqual(errorRecoveryPresentation("Refresh the library and try again."), {
     message: "Refresh the library and try again.",
     action: null,
@@ -534,5 +546,6 @@ test("meeting detail exposes only explicit retained-audio controls and polls the
   assert.match(source, /invoke\("library_stop_retained_audio"\)/);
   assert.match(source, /async function stopRetainedAudio\(\)[\s\S]*reopenSelectedMeeting\(meetingId\)/);
   assert.match(source, /response\.state === "completed"[\s\S]*reopenSelectedMeeting\(meetingId\)/);
+  assert.match(source, /response\.state !== "playing"[\s\S]*Retained audio is unavailable\. Reopen Library and try again\./);
   assert.doesNotMatch(source, /state\.error = String\(error\)/);
 });

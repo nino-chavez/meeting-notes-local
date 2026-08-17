@@ -249,7 +249,32 @@ export function errorRecoveryPresentation(error, { hasSelectedMeeting = false } 
   ].includes(message)) {
     return { message, action: { action: "refresh-library", label: "Check again" } };
   }
-  if (message === "The local transcript is unavailable. Reopen the meeting and try again." && hasSelectedMeeting) {
+  const selectedMeetingRecoveryMessages = [
+    "The local transcript is unavailable. Reopen the meeting and try again.",
+    "That transcript changed. Reopen the meeting and try again.",
+    "Yawn could not safely check this transcript against local vocabulary. Nothing changed. Reopen the meeting and try again.",
+    "Your saved vocabulary could not be read. Nothing changed. Reopen the meeting and try again.",
+    "Vocabulary is unavailable. Reopen the meeting and try again.",
+    "Another action is using this meeting. Reopen it and try again.",
+    "The transcript changed. Reopen the meeting and try again.",
+    "Speaker correction is unavailable. Reopen the meeting and try again.",
+    "That speaker group is no longer available. Reopen the meeting and try again.",
+    "Recording-quality evidence changed while opening this retry. Reopen the meeting and try again.",
+    "Recording-device evidence changed while opening this retry. Reopen the meeting and try again.",
+    "The retry candidate changed. Reopen the meeting and try again.",
+    "Retained audio is unavailable. Reopen Library and try again.",
+    "Recording deletion is unavailable. Reopen Library and try again.",
+    "Audio retention details are unavailable. Reopen Library and try again.",
+    "This meeting changed or is no longer available. Reopen it and try again.",
+    "Another action for this meeting is in progress. Reopen Library and try again.",
+    "Recording deletion could not complete. Reopen Library and try again.",
+    "Transcript deletion is unavailable. Reopen Library and try again.",
+    "Transcript deletion could not complete. Reopen Library and try again.",
+    "Meeting deletion is unavailable. Reopen Library and try again.",
+    "Meeting deletion could not complete. Reopen Library and try again.",
+    "That transcript is no longer available. Reopen Library and try again.",
+  ];
+  if (hasSelectedMeeting && selectedMeetingRecoveryMessages.includes(message)) {
     return { message, action: { action: "refresh-selected-meeting", label: "Refresh this meeting" } };
   }
   return { message, action: null };

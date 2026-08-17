@@ -51,6 +51,7 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "library_stop_retained_audio",
     "library_open_transcript",
     "library_open_transcript_file",
+    "correct_speaker_name",
     "local_vocabulary_list",
     "local_vocabulary_add",
     "local_vocabulary_edit",
