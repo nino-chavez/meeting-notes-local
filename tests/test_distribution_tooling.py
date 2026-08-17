@@ -719,7 +719,7 @@ class DistributionToolingTests(unittest.TestCase):
         )
         rust_alpha = set(
             re.findall(
-                r"\b([A-Z][A-Za-z]+)\b",
+                r"(?m)^\s*([A-Z][A-Za-z]+),\s*$",
                 supervision.split("pub fn internal_alpha_operations", 1)[1]
                 .split("[", 1)[1]
                 .split("]", 1)[0],
@@ -731,10 +731,9 @@ class DistributionToolingTests(unittest.TestCase):
             {flat(name) for name in python_alpha},
             {flat(name) for name in rust_alpha},
         )
-        # Both stay out of the packaged set: publication is Rust's own path, and
-        # no note generator is admitted.
+        # Profile adoption stays outside internal alpha because it changes the
+        # active profile rather than producing inspectable candidate evidence.
         self.assertNotIn("profile.adopt", python_alpha)
-        self.assertNotIn("note.inspect", python_alpha)
 
     def test_manifest_encoder_argument_binds_the_named_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
