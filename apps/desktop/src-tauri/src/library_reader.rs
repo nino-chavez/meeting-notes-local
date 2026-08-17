@@ -1250,8 +1250,10 @@ impl LibraryReader {
         }
         let playback = self.audio_playback_handles.get(handle).cloned();
         // Playback handles are single-use and belong to this exact projection
-        // generation, just like deletion handles. Clear even on a bad handle.
-        self.clear_handles();
+        // generation. Clear every competing navigation/deletion capability,
+        // but preserve the current detail view's personal-note edit handle so
+        // listening cannot make an adjacent unsaved note fail.
+        self.clear_non_note_handles();
         let Some(playback) = playback else {
             return Err(Self::stale_audio_playback());
         };
@@ -2374,12 +2376,18 @@ mod tests {
         let note_handle = note
             .operator_note_handle
             .expect("readable meeting gets an edit handle");
+        let playback_handle = note
+            .microphone_playback_handle
+            .expect("retained meeting gets a microphone playback handle");
         let transcript_handle = note
             .transcript_handle
             .expect("retained meeting gets a transcript handle");
         reader
             .open_transcript_bound(&transcript_handle, &HashSet::new(), |_, _, _| ())
             .unwrap();
+        reader
+            .authorize_audio_playback(&playback_handle, &HashSet::new())
+            .expect("listening keeps the adjacent personal-note handle valid");
         let saved = reader
             .open_operator_note_bound(&note_handle, &HashSet::new(), |storage, meeting_id| {
                 called.set(true);

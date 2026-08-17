@@ -4669,6 +4669,9 @@ fn library_open_note(
     handle: String,
     state: State<'_, ApplicationState>,
 ) -> library_reader::LibraryNoteResponse {
+    let Ok(_command) = state.command_lock.lock() else {
+        return library_reader::LibraryReader::unavailable_note("");
+    };
     // A detail view is a playback boundary: reopening it must never leave an
     // earlier recording playing behind a different meeting.
     stop_owned_audio_playback(&state);
@@ -4759,6 +4762,13 @@ fn library_retained_audio_playback_status(
 fn library_stop_retained_audio(
     state: State<'_, ApplicationState>,
 ) -> RetainedAudioPlaybackResponse {
+    let Ok(_command) = state.command_lock.lock() else {
+        return audio_playback_response(
+            "unavailable",
+            None,
+            "Retained audio is unavailable. Reopen Library and try again.",
+        );
+    };
     stop_owned_audio_playback(&state);
     audio_playback_response("idle", None, "No recording is playing.")
 }

@@ -532,4 +532,7 @@ test("meeting detail exposes only explicit retained-audio controls and polls the
   assert.match(source, /invoke\("library_play_retained_audio", \{ handle \}\)/);
   assert.match(source, /invoke\("library_retained_audio_playback_status"\)/);
   assert.match(source, /invoke\("library_stop_retained_audio"\)/);
+  assert.match(source, /async function stopRetainedAudio\(\)[\s\S]*reopenSelectedMeeting\(meetingId\)/);
+  assert.match(source, /response\.state === "completed"[\s\S]*reopenSelectedMeeting\(meetingId\)/);
+  assert.doesNotMatch(source, /state\.error = String\(error\)/);
 });

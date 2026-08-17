@@ -1460,8 +1460,12 @@ async function playRetainedAudio(source) {
 }
 
 async function stopRetainedAudio() {
+  const meetingId = state.selected?.row?.meetingId;
   await runBusy("stop-retained-audio", async () => {
-    state.audioPlayback = await invoke("library_stop_retained_audio");
+    const response = await invoke("library_stop_retained_audio");
+    state.notice = response.message || "Playback stopped.";
+    if (meetingId) await reopenSelectedMeeting(meetingId);
+    else state.audioPlayback = response;
   });
 }
 
@@ -1469,7 +1473,15 @@ async function refreshRetainedAudioPlayback() {
   if (!state.selected || state.audioPlayback?.state !== "playing" || audioPlaybackPollActive) return;
   audioPlaybackPollActive = true;
   try {
-    state.audioPlayback = await invoke("library_retained_audio_playback_status");
+    const response = await invoke("library_retained_audio_playback_status");
+    if (response.state === "completed") {
+      const meetingId = state.selected?.row?.meetingId;
+      state.notice = response.message || "The recording finished.";
+      if (meetingId) await reopenSelectedMeeting(meetingId);
+      else state.audioPlayback = response;
+    } else {
+      state.audioPlayback = response;
+    }
     render();
   } catch (error) {
     state.audioPlayback = { state: "unavailable", source: null, message: "Retained audio is unavailable. Reopen Library and try again." };
@@ -1789,7 +1801,9 @@ function queueNoteSave(text = state.noteDraft, meetingId = state.snapshot?.meeti
     }
   }).catch((error) => {
     state.noteSaveState = "local";
-    state.error = String(error).replace(/^Error:\s*/, "") || "Yawn could not save this note.";
+    state.error = errorRecoveryPresentation(error || "Yawn could not save this note.", {
+      hasSelectedMeeting: Boolean(state.selected?.row?.meetingId),
+    });
     render();
   });
   return state.noteSaveQueue;
@@ -1826,7 +1840,9 @@ function queueSelectedNoteSave(text = state.selected?.operatorNoteDraft, selecti
     .catch((error) => {
       if (state.selected !== selection) return;
       selection.operatorNoteSaveState = "local";
-      state.error = String(error).replace(/^Error:\s*/, "") || "Yawn could not save this note.";
+      state.error = errorRecoveryPresentation(error || "Yawn could not save this note.", {
+        hasSelectedMeeting: Boolean(state.selected?.row?.meetingId),
+      });
       render();
     });
   return selection.operatorNoteSaveQueue;
@@ -2131,7 +2147,7 @@ async function initialize() {
       refreshPermissions(),
     ]);
   } catch (error) {
-    state.error = String(error).replace(/^Error:\s*/, "") || "Yawn could not open its local workspace.";
+    state.error = errorRecoveryPresentation(error || "Yawn could not open its local workspace.");
   }
   render();
   window.setInterval(() => {
