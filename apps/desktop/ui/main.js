@@ -4,7 +4,9 @@ import {
   captureActivityElapsedSeconds,
   captureIsInProgress,
   capturePresentation,
+  errorRecoveryPresentation,
   humanize,
+  libraryRecoveryPresentation,
   localVocabularyPresentation,
   meetingRecoveryPresentation,
   meetingNotePresentation,
@@ -177,7 +179,7 @@ function render() {
       ${state.modal === "vocabulary" ? renderVocabularySheet() : ""}
       ${["delete-recording", "delete-transcript", "delete-meeting"].includes(state.modal) ? renderMeetingDeletionSheet() : ""}
       ${state.notice ? `<aside class="toast toast-notice" role="status"><button type="button" data-action="clear-notice" aria-label="Dismiss">×</button>${escapeHtml(state.notice)}</aside>` : ""}
-      ${state.error ? `<aside class="toast" role="alert"><button type="button" data-action="clear-error" aria-label="Dismiss">×</button>${escapeHtml(state.error)}</aside>` : ""}
+      ${state.error ? `<aside class="toast" role="alert"><button type="button" data-action="clear-error" aria-label="Dismiss">×</button><span>${escapeHtml(state.error.message)}</span>${state.error.action ? `<button class="button button-quiet button-small" type="button" data-action="${escapeHtml(state.error.action.action)}">${escapeHtml(state.error.action.label)}</button>` : ""}</aside>` : ""}
     </div>
   `;
   restoreEditorFocus(editorFocus);
@@ -322,6 +324,10 @@ function renderHome() {
 
 function renderLibrary(library) {
   if (!library) return `<p class="quiet-copy">Loading meetings saved on this Mac…</p>`;
+  const recovery = libraryRecoveryPresentation(library);
+  if (recovery) {
+    return `<section class="empty-library recovery-card attention" aria-labelledby="library-recovery-title"><h3 id="library-recovery-title">${escapeHtml(recovery.title)}</h3><p>${escapeHtml(recovery.detail)}</p><button class="button button-primary button-small" type="button" data-action="${recovery.action.action}">${escapeHtml(recovery.action.label)}</button></section>`;
+  }
   if (!library.rows?.length) {
     const message = state.search.trim()
       ? library.message || "No meeting matches that title."
@@ -550,7 +556,18 @@ function renderMeetingNoteItems(claims, claimEvidence) {
 
 function renderMeetingNote(note, claimEvidence) {
   const presentation = meetingNotePresentation(note);
-  if (presentation.state === "empty") return "";
+  if (presentation.state === "empty") {
+    if (note?.state !== "transcript-only") return "";
+    return `
+      <section class="meeting-note meeting-note-unavailable" aria-labelledby="meeting-note-heading">
+        <header class="meeting-note-header">
+          <p class="eyebrow">Meeting note</p>
+          <h2 id="meeting-note-heading">No meeting note yet.</h2>
+          <p>${escapeHtml(note?.message || "Yawn has no generated note for this meeting.")}</p>
+        </header>
+      </section>
+    `;
+  }
   if (presentation.state === "extracts-only") {
     const count = presentation.highlights.length;
     return `
@@ -712,11 +729,11 @@ function renderMeeting() {
         <p class="meeting-storage-note">${escapeHtml(retentionMessage)}</p>
       </header>
       ${renderMeetingRecovery(recovery)}
-      ${!recovery && note?.message && !claims.length ? `<p class="message-card ${note.state === "summary-failed" ? "attention" : ""}">${escapeHtml(note.message)}</p>` : ""}
-      ${renderGenerateNote(note, recovery)}
+      ${!recovery && note?.state !== "transcript-only" && note?.message && !claims.length ? `<p class="message-card ${note.state === "summary-failed" ? "attention" : ""}">${escapeHtml(note.message)}</p>` : ""}
       <div class="meeting-workspace">
         <main class="meeting-source-pane">
           ${renderMeetingNote(note, claimEvidence)}
+          ${renderGenerateNote(note, recovery)}
           ${renderTranscriptRetryAction(note, transcript, recovery)}
           ${renderTranscriptDisclosure(transcript, recovery)}
         </main>
@@ -1215,7 +1232,9 @@ function setLibraryNoteSaveCopy() {
 }
 
 function reportError(error) {
-  state.error = String(error instanceof Error ? error.message : error).replace(/^Error:\s*/, "").trim() || "Yawn could not complete that action.";
+  state.error = errorRecoveryPresentation(error, {
+    hasSelectedMeeting: Boolean(state.selected?.row?.meetingId),
+  });
   render();
 }
 
@@ -1779,6 +1798,17 @@ async function openMeetings() {
   await runBusy("library", refreshLibrary);
 }
 
+async function refreshLibraryFromRecovery() {
+  if (!invoke) return;
+  await runBusy("refresh-library", refreshLibrary);
+}
+
+async function refreshSelectedMeetingFromRecovery() {
+  const meetingId = state.selected?.row?.meetingId;
+  if (!meetingId || !invoke) return;
+  await runBusy("refresh-selected-meeting", () => reopenSelectedMeeting(meetingId));
+}
+
 function transcriptTurns(scope) {
   return scope === "library"
     ? state.selected?.transcript?.turns || []
@@ -1922,6 +1952,8 @@ function handleClick(event) {
     queueMicrotask(() => root.querySelector("[data-field='transcript-search']")?.focus());
   }
   else if (action === "retry-startup") void retryStartup();
+  else if (action === "refresh-library") void refreshLibraryFromRecovery();
+  else if (action === "refresh-selected-meeting") void refreshSelectedMeetingFromRecovery();
   else if (action === "install-model") void installModel(control.dataset.modelId).catch(reportError);
   else if (action === "request-microphone") void requestPermission("microphone");
   else if (action === "request-system-audio") void requestPermission("system-audio");

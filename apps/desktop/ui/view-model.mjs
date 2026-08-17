@@ -191,6 +191,49 @@ export function humanize(value) {
   return String(value || "").replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+// The library owns its state and message. Do not turn an unavailable or stale
+// snapshot into the same empty-state promise used for a genuinely empty list.
+export function libraryRecoveryPresentation(library) {
+  const state = library?.state || "";
+  if (!["unavailable", "stale"].includes(state)) return null;
+  return {
+    state,
+    title: "Meetings need another check.",
+    detail: typeof library?.message === "string" && library.message.trim()
+      ? library.message.trim()
+      : "Yawn could not load your saved meetings.",
+    action: { action: "refresh-library", label: "Check again" },
+  };
+}
+
+// Backend commands currently return user-facing errors as text, not tagged
+// classes. Map only their exact, stable recovery responses. A generic "try
+// again" can describe any operation, so it must remain a plain error.
+export function errorRecoveryPresentation(error, { hasSelectedMeeting = false } = {}) {
+  const message = String(error instanceof Error ? error.message : error || "")
+    .replace(/^Error:\s*/, "")
+    .trim() || "Yawn could not complete that action.";
+  if (message === "That view is no longer current. Reopen it and try again.") {
+    return {
+      message,
+      action: hasSelectedMeeting
+        ? { action: "refresh-selected-meeting", label: "Refresh this meeting" }
+        : { action: "refresh-library", label: "Check again" },
+    };
+  }
+  if ([
+    "The local library is unavailable. Reopen the app and try again.",
+    "The local Preview library is unavailable. Reopen the app and try again.",
+    "The local meeting library is unavailable. Reopen the app and try again.",
+  ].includes(message)) {
+    return { message, action: { action: "refresh-library", label: "Check again" } };
+  }
+  if (message === "The local transcript is unavailable. Reopen the meeting and try again." && hasSelectedMeeting) {
+    return { message, action: { action: "refresh-selected-meeting", label: "Refresh this meeting" } };
+  }
+  return { message, action: null };
+}
+
 const MEETING_NOTE_GROUPS = Object.freeze([
   ["decision", "Decisions"],
   ["action", "Follow-ups"],
@@ -449,7 +492,9 @@ export function meetingRecoveryPresentation(note, transcript, generatingMeetingI
       state: "transcript-unavailable",
       tone: "attention",
       title: "The transcript is unavailable.",
-      detail: "Yawn could not load this meeting’s transcript. The note and any transcript text already shown stay unchanged. Reopen Meetings to try this meeting again.",
+      detail: typeof transcript?.message === "string" && transcript.message.trim()
+        ? transcript.message.trim()
+        : "Yawn could not load this meeting’s transcript. Reopen Meetings to try this meeting again.",
       action: { action: "meetings", label: "Back to meetings" },
     };
   }

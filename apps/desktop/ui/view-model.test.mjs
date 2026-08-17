@@ -9,7 +9,9 @@ import {
   captureActivityElapsedSeconds,
   captureIsInProgress,
   capturePresentation,
+  errorRecoveryPresentation,
   humanize,
+  libraryRecoveryPresentation,
   localVocabularyPresentation,
   meetingRecoveryPresentation,
   meetingNotePresentation,
@@ -312,7 +314,7 @@ test("retry comparison UI keeps the decision explicit and uses exact backend com
 test("retry comparison redacts withheld text and keeps the summary before personal notes", async () => {
   const source = await readFile(new URL("./main.js", import.meta.url), "utf8");
   assert.match(source, /turn\.withheld \? "This turn was withheld by the voice check\." : escapeHtml\(turn\.text\)/);
-  assert.match(source, /renderMeetingNote\(note, claimEvidence\)\}\n\s*\$\{renderTranscriptRetryAction\(note, transcript, recovery\)\}\n\s*\$\{renderTranscriptDisclosure\(transcript, recovery\)\}/);
+  assert.match(source, /renderMeetingNote\(note, claimEvidence\)\}\n\s*\$\{renderGenerateNote\(note, recovery\)\}\n\s*\$\{renderTranscriptRetryAction\(note, transcript, recovery\)\}\n\s*\$\{renderTranscriptDisclosure\(transcript, recovery\)\}/);
   assert.match(source, /<aside class="meeting-notes-pane">\s*<section class="note-section your-notes-section"/);
   assert.match(source, /function renderRetryWarnings\(warnings, label\)/);
 });
@@ -348,6 +350,43 @@ test("the generate control follows the backend's eligibility signal alone", () =
   assert.equal(noteGenerationPresentation({ meetingId: "m-1" }, ""), null);
   assert.equal(noteGenerationPresentation({ regenerationSourceSha256: "x" }, ""), null);
   assert.equal(noteGenerationPresentation(null, ""), null);
+});
+
+test("unavailable library keeps its backend message and offers a real refresh", () => {
+  const recovery = libraryRecoveryPresentation({
+    state: "unavailable",
+    rows: [],
+    message: "The local library is unavailable. Reopen the app and try again.",
+  });
+  assert.equal(recovery.title, "Meetings need another check.");
+  assert.equal(recovery.detail, "The local library is unavailable. Reopen the app and try again.");
+  assert.deepEqual(recovery.action, { action: "refresh-library", label: "Check again" });
+  assert.equal(libraryRecoveryPresentation({ state: "empty", rows: [] }), null);
+});
+
+test("only exact backend recovery errors receive contextual actions", () => {
+  assert.deepEqual(errorRecoveryPresentation("That view is no longer current. Reopen it and try again."), {
+    message: "That view is no longer current. Reopen it and try again.",
+    action: { action: "refresh-library", label: "Check again" },
+  });
+  assert.deepEqual(errorRecoveryPresentation("That view is no longer current. Reopen it and try again.", { hasSelectedMeeting: true }), {
+    message: "That view is no longer current. Reopen it and try again.",
+    action: { action: "refresh-selected-meeting", label: "Refresh this meeting" },
+  });
+  assert.deepEqual(errorRecoveryPresentation("The local meeting library is unavailable. Reopen the app and try again."), {
+    message: "The local meeting library is unavailable. Reopen the app and try again.",
+    action: { action: "refresh-library", label: "Check again" },
+  });
+  assert.deepEqual(errorRecoveryPresentation("Refresh the library and try again."), {
+    message: "Refresh the library and try again.",
+    action: null,
+  });
+});
+
+test("meeting refresh action reopens only the selected meeting", async () => {
+  const source = await readFile(new URL("./main.js", import.meta.url), "utf8");
+  assert.match(source, /async function refreshSelectedMeetingFromRecovery\(\) \{\s*const meetingId = state\.selected\?\.row\?\.meetingId;[\s\S]*reopenSelectedMeeting\(meetingId\)/);
+  assert.match(source, /else if \(action === "refresh-selected-meeting"\) void refreshSelectedMeetingFromRecovery\(\);/);
 });
 
 test("summary failure keeps the transcript and offers regeneration when its source is pinned", () => {
@@ -395,7 +434,16 @@ test("stale transcript routes back to meetings instead of inventing a transcript
   );
   assert.equal(recovery.state, "transcript-unavailable");
   assert.deepEqual(recovery.action, { action: "meetings", label: "Back to meetings" });
-  assert.match(recovery.detail, /stay unchanged/);
+  assert.equal(recovery.detail, "That transcript is no longer available.");
+});
+
+test("an empty transcript-only note remains explicit and only receives a generate control from its source pin", async () => {
+  const source = await readFile(new URL("./main.js", import.meta.url), "utf8");
+  assert.match(source, /<h2 id="meeting-note-heading">No meeting note yet\.<\/h2>/);
+  assert.match(source, /if \(note\?\.state !== "transcript-only"\) return "";/);
+  assert.match(source, /!recovery && note\?\.state !== "transcript-only" && note\?\.message && !claims\.length/);
+  assert.match(source, /\$\{renderMeetingNote\(note, claimEvidence\)\}\n\s*\$\{renderGenerateNote\(note, recovery\)\}/);
+  assert.match(source, /function renderGenerateNote[\s\S]*noteGenerationPresentation\(note, state\.generatingMeetingId\)/);
 });
 
 test("released audio says retranscription is unavailable while preserving the note and transcript", () => {
