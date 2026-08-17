@@ -407,6 +407,13 @@ post-promotion state, recovery-toast journeys, and the exact installed
 production package. No Settings change, permission change, recording, private
 content, or real meeting audio was used.
 
+**Fresh-state fixture support.** A marker-bound archive command now moves the
+exact synthetic fixture to a recoverable same-parent archive under the canonical
+writer lock. It uses an exclusive atomic rename, refuses existing destinations,
+and never deletes or automatically reseeds data. This enables separate
+**Keep current** and **Use retry** rendered walks without reusing a mutated root;
+those walks remain open until directly observed and recorded.
+
 **Developer ID-signed local-bundle receipt — 2026-08-17.** The unreleased source
 build at `target/release/bundle/macos/Yawn.app`, built from app source commit
 `97ff8c9`, passed the `internal-alpha` admission check. The bounded local lane

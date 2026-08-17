@@ -570,9 +570,29 @@ cargo run -p local-meeting-notes-session-core --bin rendered-review-fixture -- \
 The seed command refuses a relative path, the wrong final component, symlinks,
 a broad parent, an existing root, a root inside the repository, and a directory
 that is not private. The marker must remain the exact synthetic marker. Do not
-copy real meeting material into this root. There is no source-supported reset
-command; do not recommend deleting or resetting the root. A fresh empty root is
-required for another seed.
+copy real meeting material into this root.
+
+### Archive one fixture before seeding the next state
+
+There is no delete or in-place reset command. The bounded rotation command moves
+an exact fixture to a recoverable sibling archive, then leaves the canonical root
+absent for a fresh seed:
+
+```bash
+cargo run -p local-meeting-notes-session-core --bin rendered-review-fixture -- \
+  archive \
+  "/Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture" \
+  "/Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture.archive-keep-current"
+```
+
+The archive destination must be absent, share the source root's canonical
+parent, and end in `.archive-<label>`; the label is 1–64 ASCII letters, digits,
+or hyphens. The command validates the exact synthetic markers, private modes,
+and absence of symlinks, acquires the canonical app-data writer lock, repeats
+the checks under that lock, and publishes the archive with an exclusive atomic
+rename. It refuses a running writer and never deletes, copies, overwrites, or
+automatically reseeds data. After it succeeds, run the seed and verified public
+model-import steps again for the next isolated journey.
 
 ### Import one verified public transcript model
 
