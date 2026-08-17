@@ -141,7 +141,7 @@ fn seed(root: &Path, repository: PathBuf) -> Result<(), FixtureError> {
             "source": {"leg":"mic","artifact":"mic.wav","samples":AUDIO_FRAMES,"sha256":mic_ref.sha256},
             "metrics": {"duration_s":8.0},
             "observations": {
-                "silence":{"status":"not_observed","detail":"synthetic"},
+                "silence":{"status":"observed","detail":"synthetic"},
                 "clipping":{"status":"not_observed","detail":"synthetic"},
                 "low_input":{"status":"not_observed","detail":"synthetic"},
                 "background_noise":{"status":"unknown","detail":"synthetic"}
@@ -345,8 +345,8 @@ mod tests {
     use tempfile::TempDir;
 
     use local_meeting_notes_session_core::capture_quality::{
-        project_capture_quality, project_recording_device, CaptureQualityState,
-        RecordingDeviceState,
+        project_capture_quality, project_recording_device, CaptureQualityObservationKind,
+        CaptureQualityObservationStatus, CaptureQualityState, RecordingDeviceState,
     };
     use local_meeting_notes_session_core::meeting::verify_artifact_ref;
     use local_meeting_notes_session_core::transcript_retry::TranscriptRetryState;
@@ -380,6 +380,15 @@ mod tests {
         let source = meeting.artifacts.current_transcript.clone().unwrap();
         let quality = project_capture_quality(&meeting_dir, &meeting).unwrap();
         assert_eq!(quality.state, CaptureQualityState::Available);
+        assert_eq!(
+            quality
+                .observations
+                .iter()
+                .find(|observation| observation.kind == CaptureQualityObservationKind::Silence)
+                .unwrap()
+                .status,
+            CaptureQualityObservationStatus::Observed
+        );
         assert_eq!(
             project_recording_device(&meeting_dir, &meeting)
                 .unwrap()
