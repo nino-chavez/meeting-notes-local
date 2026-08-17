@@ -521,6 +521,107 @@ Verified on the 2026-08-08 build: `verify` ran 117 tests, `OK`, with **all 16
 `LMN_EMBEDDING_MODEL_DIR` for that reason, because a suite that skipped the only
 tests touching the model would report the same green as one that ran them.
 
+## Fixture-bundle lane (local rendered review, not Preview or a release)
+
+This lane makes a disposable, privacy-safe data set visible in a signed local
+app. It is for checking rendered library, meeting-detail, retry, quality, device,
+decision, and playback states. It is not Preview: Preview tests the signed
+permission surface. It is not production, notarization, installation, or
+shipment.
+
+The bundle and its data root are deliberately separate from every live app:
+
+```text
+app:  /Users/nino/Workspace/dev/apps/yawn-app/target/release/bundle/macos/Yawn Fixture.app
+id:   com.ninochavez.local-meeting-notes.fixture
+root: /Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture
+```
+
+Build and verify from `apps/desktop`:
+
+```bash
+cd apps/desktop
+npm run fixture-build
+npm run fixture-verify
+```
+
+The build script uses `tauri.fixture.conf.json`, signs the resulting app with
+the local Developer ID identity through `prepare-preview-bundle.sh`, and does
+not notarize or package it. As with Preview, restore the generated capability
+schema and lockfile if the build rewrites them before committing:
+
+```bash
+git checkout -- apps/desktop/src-tauri/gen/schemas/capabilities.json \
+                apps/desktop/package-lock.json
+```
+
+### Seed the synthetic root
+
+Build the `rendered-review-fixture` binary, then pass exactly one absolute path.
+The final path component must be the fixture bundle identifier. The command
+creates deterministic invented transcript and retry data, two eight-second
+silent WAVs, and `SYNTHETIC_FIXTURE.json`; it does not create a generated note:
+
+```bash
+cargo run -p local-meeting-notes-session-core --bin rendered-review-fixture -- \
+  "/Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture"
+```
+
+The seed command refuses a relative path, the wrong final component, symlinks,
+a broad parent, an existing root, a root inside the repository, and a directory
+that is not private. The marker must remain the exact synthetic marker. Do not
+copy real meeting material into this root. There is no source-supported reset
+command; do not recommend deleting or resetting the root. A fresh empty root is
+required for another seed.
+
+### Import one verified public transcript model
+
+The source exposes the only model-import form as:
+
+```bash
+cargo run -p local-meeting-notes-session-core --bin rendered-review-fixture -- \
+  install-model ROOT BUNDLE_RESOURCES SOURCE_MODEL_DIR MODEL_ID
+```
+
+For a real run, use the exact fixture root above, the signed app's Resources
+directory, and a public model directory whose leaf is exactly
+`<model-id>/<catalog-revision>`:
+
+```bash
+cargo run -p local-meeting-notes-session-core --bin rendered-review-fixture -- \
+  install-model \
+  "/Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture" \
+  "/Users/nino/Workspace/dev/apps/yawn-app/target/release/bundle/macos/Yawn Fixture.app/Contents/Resources" \
+  "/absolute/path/<model-id>/<catalog-revision>" \
+  "<model-id>"
+```
+
+Use only a public model that is already present in the verified bundle catalog.
+The importer re-verifies the catalog and source bytes, copies only the catalog's
+config and weights, then activates the model and writes `MODEL_FIXTURE.json`.
+It refuses symlinked or non-directory inputs, repository-contained sources,
+wrong model/revision leaves, existing model state, and source changes during the
+bounded copy. The angle-bracket values above are placeholders, not model names
+or revisions to invent; read the bundle's verified `model-catalog.json` first.
+
+### Rendered receipt — 2026-08-17
+
+Direct observation used the exact signed app at the path above, with bundle ID
+`com.ninochavez.local-meeting-notes.fixture` and root
+`/Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture`.
+The root held only the deterministic invented transcript/retry fixture, two
+eight-second silent WAVs, and a verified public model. The rendered walk opened
+the library and meeting detail, compared the pending retry, inspected recording
+quality and device context, selected **Decide later**, and exercised active
+playback with **Stop** before returning with **Back**. No settings, permissions,
+recording, or private data were involved.
+
+This receipt does not show **Keep current**, **Use retry**, correction save or
+regeneration, a generated note, a source link or post-promotion state, a recovery
+toast, or an installed production app. It is not evidence of notarization,
+installation, publication, shipment, or production behavior. Do not describe it
+as a release artifact.
+
 ## Encoder-candidate lane (admission evidence, not a release)
 
 `worker/build_runtime.sh build-alpha-encoder` builds the alpha runtime plus
