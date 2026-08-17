@@ -1044,6 +1044,18 @@ for index, (request, ids) in enumerate(batches()):
     answer(verdicts(ids, lambda position: "KEEP" if index % 20 == 0 else "ABSTAIN"))
 """
 
+STUB_REQUIRES_CORRECTED_VOCABULARY = STUB_PREAMBLE + """
+for index, (request, ids) in enumerate(batches()):
+    if index == 0:
+        packet = json.loads(request["user"].split("\\n\\n", 1)[1])[0]
+        anchor = next(row["text"] for row in packet["fragments"] if row["anchor"])
+        if 'packaging option' not in anchor or 'packagging option' in anchor:
+            Path(MARKER).write_text("wrong-vocabulary")
+        else:
+            Path(MARKER).write_text("corrected-vocabulary")
+    answer(verdicts(ids, lambda position: "KEEP" if index % 20 == 0 else "ABSTAIN"))
+"""
+
 
 MODEL_FILES = {"config.json": b"{}\n", "weights.npz": b"weights\n"}
 
@@ -1083,7 +1095,13 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.candidates = self._write_long_transcript(self.TRANSCRIPT_TURNS)
         self.assertGreater(self.candidates, 64, "fixture must span batches and the keep budget")
 
-    def _write_long_transcript(self, turns: int, *, speaker: str | None = None) -> int:
+    def _write_long_transcript(
+        self,
+        turns: int,
+        *,
+        speaker: str | None = None,
+        vocabulary_typo: bool = False,
+    ) -> int:
         """Replace the meeting's transcript with one that spans several batches."""
         sys.path.insert(0, str(REPO / "notes"))
         sys.path.insert(0, str(REPO / "spike"))
@@ -1105,7 +1123,7 @@ class NoteGenerateBridgeTests(unittest.TestCase):
                     # an emoji.
                     "text": (
                         f"Turn {index:02d}: café \U0001f642 — we agreed to review "
-                        "the packaging option."
+                        f"the {'packagging' if vocabulary_typo else 'packaging'} option."
                     ),
                     "start": float(index + 1),
                     **({"speaker": speaker} if speaker else {}),
@@ -1212,6 +1230,7 @@ class NoteGenerateBridgeTests(unittest.TestCase):
 
     def _generate_command(self, **overrides) -> tuple[str, bytes]:
         speaker_label_overrides = overrides.pop("speaker_label_overrides", None)
+        vocabulary_replacements = overrides.pop("vocabulary_replacements", None)
         request_id = str(uuid.uuid4())
         arguments = {
             "meeting_id": self.meeting_id,
@@ -1219,6 +1238,8 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         }
         if speaker_label_overrides is not None:
             arguments["speaker_label_overrides"] = speaker_label_overrides
+        if vocabulary_replacements is not None:
+            arguments["vocabulary_replacements"] = vocabulary_replacements
         arguments.update({"model_directory": self.MODEL_DIRECTORY, "deadline_s": 20})
         arguments.update(overrides)
         command = {
@@ -1373,6 +1394,69 @@ class NoteGenerateBridgeTests(unittest.TestCase):
                 text = turns[locator["turn"]]["text"][locator["start"]:locator["end"]]
                 self.assertEqual(
                     hashlib.sha256(text.encode()).hexdigest(), locator["text_sha256"]
+                )
+
+    def test_changed_length_vocabulary_overlay_preserves_original_locator_offsets(self) -> None:
+        self._write_long_transcript(self.TRANSCRIPT_TURNS, vocabulary_typo=True)
+        self._write_generator(STUB_REQUIRES_CORRECTED_VOCABULARY)
+        self._write_generate_manifest()
+        original = self._transcript_turns()[0]["text"]
+        start = original.index("packagging")
+        end = start + len("packagging")
+        result, returncode, error, _ = self._run(
+            vocabulary_replacements=[{
+                "turn": 0,
+                "char_start": start,
+                "char_end": end,
+                "source_sha256": hashlib.sha256(
+                    original[start:end].encode("utf-8")
+                ).hexdigest(),
+                # One character shorter than the retained source phrase.
+                "replacement": "packaging",
+            }]
+        )
+
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "generated")
+        self.assertEqual(self.marker.read_text(), "corrected-vocabulary")
+        turns = self._transcript_turns()
+        self.assertIn("packagging", turns[0]["text"])
+        for claim in result["generation"]["claims"]:
+            for locator in claim["locators"]:
+                text = turns[locator["turn"]]["text"][locator["start"]:locator["end"]]
+                self.assertEqual(
+                    hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                    locator["text_sha256"],
+                )
+
+    def test_stale_out_of_range_and_oversized_vocabulary_overlays_refuse_before_model_launch(self) -> None:
+        original = self._transcript_turns()[0]["text"]
+        start = original.index("packaging")
+        end = start + len("packaging")
+        valid = {
+            "turn": 0,
+            "char_start": start,
+            "char_end": end,
+            "source_sha256": hashlib.sha256(original[start:end].encode("utf-8")).hexdigest(),
+            "replacement": "package",
+        }
+        cases = {
+            "stale": [{**valid, "source_sha256": "0" * 64}],
+            "out-of-range": [{**valid, "turn": self.TRANSCRIPT_TURNS}],
+            "oversized": [valid] * 65,
+        }
+        for label, replacements in cases.items():
+            self.marker.unlink(missing_ok=True)
+            result, returncode, error, _ = self._run(
+                vocabulary_replacements=replacements
+            )
+            with self.subTest(label=label):
+                self.assertEqual((returncode, error), (0, b""))
+                self.assertEqual(result["outcome"], "transcript-only")
+                self.assertFalse(self.marker.exists())
+                self.assertEqual(
+                    result["failure"]["code"],
+                    "vocabulary-overlay" if label != "oversized" else "invalid-request",
                 )
 
     def test_generated_locators_resolve_to_the_transcripts_own_bytes(self) -> None:

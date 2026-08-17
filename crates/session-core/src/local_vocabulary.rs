@@ -13,6 +13,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -24,6 +25,10 @@ const MAX_ENTRIES: usize = 256;
 const MAX_ENTRY_TEXT_BYTES: usize = 512;
 const MAX_ENTRY_TEXT_SCALARS: usize = 256;
 const MAX_PROJECTION_BYTES: usize = 1024 * 1024;
+/// A generate command is one bounded frame. Keep the vocabulary part well
+/// below that frame's 64 KiB ceiling even when every replacement uses its
+/// largest legal text.
+const MAX_RANGE_REPLACEMENTS: usize = 64;
 
 /// Limits exposed for the local UI and its tests.  Crossing any limit fails
 /// closed; this store does not truncate operator input.
@@ -32,6 +37,7 @@ pub const LOCAL_VOCABULARY_MAX_ENTRIES: usize = MAX_ENTRIES;
 pub const LOCAL_VOCABULARY_MAX_ENTRY_TEXT_BYTES: usize = MAX_ENTRY_TEXT_BYTES;
 pub const LOCAL_VOCABULARY_MAX_ENTRY_TEXT_SCALARS: usize = MAX_ENTRY_TEXT_SCALARS;
 pub const LOCAL_VOCABULARY_MAX_PROJECTION_BYTES: usize = MAX_PROJECTION_BYTES;
+pub const LOCAL_VOCABULARY_MAX_RANGE_REPLACEMENTS: usize = MAX_RANGE_REPLACEMENTS;
 
 #[derive(Debug, Error)]
 pub enum LocalVocabularyError {
@@ -51,6 +57,8 @@ pub enum LocalVocabularyError {
     TextTooLarge,
     #[error("local vocabulary document exceeds its limit")]
     DocumentTooLarge,
+    #[error("local vocabulary projection has too many replacements for one note request")]
+    TooManyRangeReplacements,
     #[error(transparent)]
     Io(#[from] io::Error),
     #[error(transparent)]
@@ -79,6 +87,22 @@ pub struct VocabularyApplication {
 pub struct VocabularyProjection {
     pub text: String,
     pub applied: Vec<VocabularyApplication>,
+}
+
+/// One prompt-only replacement tied to an immutable source-turn scalar span.
+///
+/// `source_sha256` is the bytes of the original span, never the replacement.
+/// The worker re-derives it from the retained transcript before it sends a
+/// model request, so a vocabulary edit or a stale transcript cannot silently
+/// move a replacement to different evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VocabularyRangeReplacement {
+    pub turn: u32,
+    pub char_start: u32,
+    pub char_end: u32,
+    pub source_sha256: String,
+    pub replacement: String,
 }
 
 #[derive(Debug, Clone)]
@@ -265,61 +289,116 @@ impl LocalVocabularyStore {
             .into_iter()
             .filter(|entry| entry.enabled)
             .collect::<Vec<_>>();
-        let mut output = String::with_capacity(input.len());
-        let mut applied = Vec::new();
-        let mut cursor = 0;
-        while cursor < input.len() {
-            let best = entries
-                .iter()
-                .filter(|entry| input[cursor..].starts_with(&entry.source_phrase))
-                .max_by(|left, right| {
-                    left.source_phrase
-                        .chars()
-                        .count()
-                        .cmp(&right.source_phrase.chars().count())
-                        .then_with(|| right.created_order.cmp(&left.created_order))
-                        .then_with(|| right.id.cmp(&left.id))
-                });
-            if let Some(entry) = best {
-                let end = cursor + entry.source_phrase.len();
-                if output
-                    .len()
-                    .checked_add(entry.preferred_replacement.len())
-                    .is_none_or(|length| length > MAX_PROJECTION_BYTES)
-                {
-                    return Err(LocalVocabularyError::TextTooLarge);
-                }
-                applied.push(VocabularyApplication {
-                    entry_id: entry.id,
-                    range: cursor..end,
-                });
-                output.push_str(&entry.preferred_replacement);
-                cursor = end;
-            } else {
-                let character = input[cursor..]
-                    .chars()
-                    .next()
-                    .expect("cursor is a character boundary");
-                if output
-                    .len()
-                    .checked_add(character.len_utf8())
-                    .is_none_or(|length| length > MAX_PROJECTION_BYTES)
-                {
-                    return Err(LocalVocabularyError::TextTooLarge);
-                }
-                output.push(character);
-                cursor += character.len_utf8();
-            }
-        }
-        if output.len() > MAX_PROJECTION_BYTES {
-            return Err(LocalVocabularyError::TextTooLarge);
-        }
-        Ok(VocabularyProjection {
-            text: output,
-            applied,
-        })
+        project_with_entries(input, &entries)
     }
 
+    /// Derive the closed prompt overlay for visible source turns.
+    ///
+    /// This is deliberately a pure derivation from retained turn text and the
+    /// current enabled vocabulary. It does not create a transcript derivative.
+    /// Scalar offsets are used on the wire because Python indexes `str` by
+    /// Unicode scalar, while `VocabularyApplication` retains byte offsets for
+    /// Rust callers that need them.
+    pub fn project_turns(
+        &self,
+        turns: &[&str],
+    ) -> Result<Vec<VocabularyRangeReplacement>, LocalVocabularyError> {
+        if turns.len() > u32::MAX as usize {
+            return Err(LocalVocabularyError::TextTooLarge);
+        }
+        let entries = self
+            .load()?
+            .into_iter()
+            .filter(|entry| entry.enabled)
+            .collect::<Vec<_>>();
+        let mut replacements = Vec::new();
+        for (turn, text) in turns.iter().enumerate() {
+            let projection = project_with_entries(text, &entries)?;
+            for application in projection.applied {
+                if replacements.len() == MAX_RANGE_REPLACEMENTS {
+                    return Err(LocalVocabularyError::TooManyRangeReplacements);
+                }
+                let source = &text[application.range.clone()];
+                let entry = entries
+                    .iter()
+                    .find(|entry| entry.id == application.entry_id)
+                    .expect("application entry came from the enabled entry list");
+                replacements.push(VocabularyRangeReplacement {
+                    turn: turn as u32,
+                    char_start: text[..application.range.start].chars().count() as u32,
+                    char_end: text[..application.range.end].chars().count() as u32,
+                    source_sha256: format!("{:x}", Sha256::digest(source.as_bytes())),
+                    replacement: entry.preferred_replacement.clone(),
+                });
+            }
+        }
+        Ok(replacements)
+    }
+}
+
+fn project_with_entries(
+    input: &str,
+    entries: &[LocalVocabularyEntryWire],
+) -> Result<VocabularyProjection, LocalVocabularyError> {
+    if input.len() > MAX_PROJECTION_BYTES {
+        return Err(LocalVocabularyError::TextTooLarge);
+    }
+    let mut output = String::with_capacity(input.len());
+    let mut applied = Vec::new();
+    let mut cursor = 0;
+    while cursor < input.len() {
+        let best = entries
+            .iter()
+            .filter(|entry| input[cursor..].starts_with(&entry.source_phrase))
+            .max_by(|left, right| {
+                left.source_phrase
+                    .chars()
+                    .count()
+                    .cmp(&right.source_phrase.chars().count())
+                    .then_with(|| right.created_order.cmp(&left.created_order))
+                    .then_with(|| right.id.cmp(&left.id))
+            });
+        if let Some(entry) = best {
+            let end = cursor + entry.source_phrase.len();
+            if output
+                .len()
+                .checked_add(entry.preferred_replacement.len())
+                .is_none_or(|length| length > MAX_PROJECTION_BYTES)
+            {
+                return Err(LocalVocabularyError::TextTooLarge);
+            }
+            applied.push(VocabularyApplication {
+                entry_id: entry.id,
+                range: cursor..end,
+            });
+            output.push_str(&entry.preferred_replacement);
+            cursor = end;
+        } else {
+            let character = input[cursor..]
+                .chars()
+                .next()
+                .expect("cursor is a character boundary");
+            if output
+                .len()
+                .checked_add(character.len_utf8())
+                .is_none_or(|length| length > MAX_PROJECTION_BYTES)
+            {
+                return Err(LocalVocabularyError::TextTooLarge);
+            }
+            output.push(character);
+            cursor += character.len_utf8();
+        }
+    }
+    if output.len() > MAX_PROJECTION_BYTES {
+        return Err(LocalVocabularyError::TextTooLarge);
+    }
+    Ok(VocabularyProjection {
+        text: output,
+        applied,
+    })
+}
+
+impl LocalVocabularyStore {
     fn load(&self) -> Result<Vec<LocalVocabularyEntryWire>, LocalVocabularyError> {
         require_private_directory(&self.root)?;
         let metadata = match fs::symlink_metadata(&self.file) {
@@ -699,6 +778,54 @@ mod tests {
         assert!(matches!(
             fixture.store.project(&input),
             Err(LocalVocabularyError::TextTooLarge)
+        ));
+    }
+
+    #[test]
+    fn prompt_range_projection_keeps_original_scalar_offsets_when_text_length_changes() {
+        let fixture = Fixture::new();
+        fixture.store.add("Kibbel", "Kibble Labs").unwrap();
+        let turns = [
+            "Marta: Kibbel approved it.",
+            "withheld Kibbel text is not supplied",
+        ];
+        let replacements = fixture.store.project_turns(&turns[..1]).unwrap();
+
+        assert_eq!(replacements.len(), 1);
+        assert_eq!(replacements[0].turn, 0);
+        assert_eq!(replacements[0].char_start, 7);
+        assert_eq!(replacements[0].char_end, 13);
+        assert_eq!(replacements[0].replacement, "Kibble Labs");
+        assert_eq!(
+            replacements[0].source_sha256,
+            format!("{:x}", Sha256::digest("Kibbel".as_bytes()))
+        );
+        // The only source passed to the pure derivation is visible turn zero.
+        // A withheld row cannot get a prompt replacement by accident.
+        assert!(fixture.store.project_turns(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn prompt_range_projection_uses_the_same_overlap_and_no_op_rules() {
+        let fixture = Fixture::new();
+        fixture.store.add("New", "Old").unwrap();
+        fixture.store.add("New York", "NY").unwrap();
+        let replacements = fixture.store.project_turns(&["New York", "new"]).unwrap();
+        assert_eq!(replacements.len(), 1);
+        assert_eq!(replacements[0].turn, 0);
+        assert_eq!(replacements[0].char_start, 0);
+        assert_eq!(replacements[0].char_end, 8);
+        assert_eq!(replacements[0].replacement, "NY");
+    }
+
+    #[test]
+    fn prompt_range_projection_refuses_an_oversized_transport_overlay() {
+        let fixture = Fixture::new();
+        fixture.store.add("x", "y").unwrap();
+        let turns = vec!["x"; MAX_RANGE_REPLACEMENTS + 1];
+        assert!(matches!(
+            fixture.store.project_turns(&turns),
+            Err(LocalVocabularyError::TooManyRangeReplacements)
         ));
     }
 }

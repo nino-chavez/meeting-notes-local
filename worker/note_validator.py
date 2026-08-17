@@ -450,7 +450,54 @@ def _response_refusal(raw: str) -> str:
     return "response-contract"
 
 
-def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, list[dict]]:
+def _present_classification_user(
+    user: str,
+    transcript,
+    overlay,
+) -> str:
+    """Replace only excerpt values in an already source-bound request.
+
+    Candidate IDs, cue offsets, fragment spans, and the manifest digest remain
+    those of the retained transcript. This is the source-to-presentation
+    translation boundary: model text may change length, but evidence offsets
+    never do.
+    """
+    from summarize import build_fragment_map
+
+    prefix, encoded = user.split("\n\n", 1)
+    packets = json.loads(encoded)
+    fragments = {
+        row["source_fragment_id"]: row
+        for row in build_fragment_map(transcript)["fragments"]
+    }
+    for packet in packets:
+        for row in packet["fragments"]:
+            fragment = fragments[row["source_fragment_id"]]
+            turn = fragment["turn"]
+            row["text"] = overlay.text(turn, fragment["char_start"], fragment["char_end"])
+            speaker = overlay.speaker(turn)
+            if transcript.attribution != "none" and speaker:
+                row["speaker"] = speaker
+            else:
+                row.pop("speaker", None)
+        cue = packet["cue"]
+        if cue is not None:
+            # Candidate-first's cue offsets are source offsets. Render the
+            # model-only value through the same mapping, without mutating the
+            # offset fields that the manifest already authenticated.
+            anchor = next(
+                item for item in packet["fragments"] if item["anchor"]
+            )
+            fragment = fragments[anchor["source_fragment_id"]]
+            cue["text"] = overlay.text(
+                fragment["turn"], cue["char_start"], cue["char_end"]
+            )
+    return prefix + "\n\n" + json.dumps(
+        packets, ensure_ascii=False, separators=(",", ":")
+    )
+
+
+def _classify_candidates(transcript, overlay, ask: Callable[[dict], str]) -> tuple[dict, list[dict]]:
     """Enumerate candidates locally, then take one verdict per offered candidate.
 
     This is the measured task, not a paraphrase of it. Deterministic local code
@@ -499,6 +546,7 @@ def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, 
                 transcript, manifest, batch, batch_size,
                 offer_stride=registered["offer_stride"],
             )
+            user = _present_classification_user(user, transcript, overlay)
         except (StructuredOutputError, ValueError, KeyError, TypeError, IndexError) as exc:
             raise GenerationRefused("request-contract", False) from exc
         raw = ask(
@@ -612,7 +660,7 @@ def _strip_json_fence(content: str) -> str:
     return value
 
 
-def _synthesis_source_rows(manifest: dict, kept: list[dict], transcript) -> list[dict]:
+def _synthesis_source_rows(manifest: dict, kept: list[dict], transcript, overlay) -> list[dict]:
     from summarize import build_fragment_map
 
     fragments = {
@@ -626,9 +674,9 @@ def _synthesis_source_rows(manifest: dict, kept: list[dict], transcript) -> list
             {
                 "alias": f"E{index:02d}",
                 "candidate_id": candidate["candidate_id"],
-                "text": transcript.turns[anchor["turn"]].text[
-                    anchor["char_start"]:anchor["char_end"]
-                ],
+                "text": overlay.text(
+                    anchor["turn"], anchor["char_start"], anchor["char_end"]
+                ),
             }
         )
     return rows
@@ -793,9 +841,10 @@ def synthesize_note(
     manifest: dict,
     kept: list[dict],
     points: list[dict],
+    overlay,
     ask: Callable[[dict], str],
 ) -> list[dict]:
-    sources = _synthesis_source_rows(manifest, kept, transcript)
+    sources = _synthesis_source_rows(manifest, kept, transcript, overlay)
     user = "SELECTED TRANSCRIPT EXCERPTS:\n" + "\n".join(
         json.dumps(
             {"id": row["alias"], "text": row["text"]},
@@ -865,19 +914,24 @@ def generate(
             transcript = load_bytes(transcript_bytes, source=f"transcript:{transcript_id}")
         except (UnicodeError, ValueError, KeyError, TypeError, IndexError) as exc:
             raise ArtifactFailure("artifact-invalid", False) from exc
-        # The bridge already closed this operation-scoped overlay. Apply it
-        # only after the retained bytes have passed their digest check, and
-        # only to the in-memory prompt view. Note artifacts and locators keep
-        # naming `transcript_id`, the immutable retained source.
-        if "speaker_label_overrides" in arguments:
-            transcript = transcript.with_speaker_label_overrides(
-                arguments["speaker_label_overrides"]
+        # Build the prompt-only view only after retained bytes have passed
+        # their digest check. It retains original source spans even when a
+        # vocabulary replacement changes text length; note artifacts and
+        # locators keep naming the immutable `transcript_id` source.
+        from transcript import PromptOverlay
+        try:
+            overlay = PromptOverlay.from_transport(
+                transcript,
+                arguments.get("speaker_label_overrides"),
+                arguments.get("vocabulary_replacements"),
             )
+        except (KeyError, TypeError, ValueError, UnicodeError) as exc:
+            raise GenerationRefused("vocabulary-overlay", False) from exc
         if not transcript.turns:
             raise GenerationRefused("no-generatable-transcript", True)
-        manifest, kept = _classify_candidates(transcript, ask)
+        manifest, kept = _classify_candidates(transcript, overlay, ask)
         points = locate_kept_candidates(manifest, kept, transcript)
-        claims = synthesize_note(transcript, manifest, kept, points, ask)
+        claims = synthesize_note(transcript, manifest, kept, points, overlay, ask)
         _require_links(directories, files)
         _require_snapshot(transcript_file, transcript_bytes, transcript_id)
         _require_links(directories, files)

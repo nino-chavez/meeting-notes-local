@@ -13,6 +13,8 @@ class ProductContractRefused(ValueError):
 
 
 MAX_SOURCE_TURN_INDEX = (1 << 32) - 1
+MAX_VOCABULARY_REPLACEMENTS = 64
+MAX_VOCABULARY_REPLACEMENT_BYTES = 512
 
 
 def _exact_object(value: object, names: set[str], label: str) -> dict:
@@ -69,6 +71,54 @@ def validate_speaker_label_overrides(value: object) -> list[dict]:
     return value
 
 
+def validate_vocabulary_replacements(value: object) -> list[dict]:
+    """Close the prompt-only source-span vocabulary overlay.
+
+    This admits structure and boundedness only. `note_validator` re-derives
+    each scalar range and digest from the immutable transcript before a model
+    sees any replacement, which is the point at which stale source text can be
+    detected.
+    """
+    if not isinstance(value, list) or len(value) > MAX_VOCABULARY_REPLACEMENTS:
+        raise ProductContractRefused("vocabulary overlay has too many replacements")
+    previous: tuple[int, int, int] | None = None
+    for replacement in value:
+        replacement = _exact_object(
+            replacement,
+            {"turn", "char_start", "char_end", "source_sha256", "replacement"},
+            "vocabulary overlay entry",
+        )
+        turn = replacement["turn"]
+        start = replacement["char_start"]
+        end = replacement["char_end"]
+        text = replacement["replacement"]
+        if (
+            isinstance(turn, bool)
+            or not isinstance(turn, int)
+            or turn < 0
+            or turn > MAX_SOURCE_TURN_INDEX
+            or isinstance(start, bool)
+            or not isinstance(start, int)
+            or start < 0
+            or isinstance(end, bool)
+            or not isinstance(end, int)
+            or end <= start
+            or not isinstance(text, str)
+            or not text
+            or len(text.encode("utf-8")) > MAX_VOCABULARY_REPLACEMENT_BYTES
+            or any(unicodedata.category(character) in {"Cc", "Cs"} for character in text)
+        ):
+            raise ProductContractRefused("vocabulary overlay replacement is invalid")
+        _digest(replacement["source_sha256"], "vocabulary overlay source digest")
+        position = (turn, start, end)
+        if previous is not None and previous >= position:
+            raise ProductContractRefused(
+                "vocabulary overlay replacements are not source ordered"
+            )
+        previous = position
+    return value
+
+
 def validate_transcript_restore_arguments(value: object) -> dict:
     arguments = _exact_object(
         value,
@@ -99,7 +149,11 @@ def validate_note_create_arguments(value: object) -> dict:
     """
     names = {"meeting_id", "source_transcript_sha256"}
     if isinstance(value, dict):
-        names |= {key for key in ("generation", "speaker_label_overrides") if key in value}
+        names |= {
+            key for key in (
+                "generation", "speaker_label_overrides", "vocabulary_replacements"
+            ) if key in value
+        }
     arguments = _exact_object(value, names, "note.create arguments")
     _uuid(arguments["meeting_id"], "meeting_id")
     _digest(arguments["source_transcript_sha256"], "source_transcript_sha256")
@@ -149,6 +203,8 @@ def validate_note_create_arguments(value: object) -> dict:
                 "generation receipt elapsed_s must be a nonnegative number")
     if "speaker_label_overrides" in arguments:
         validate_speaker_label_overrides(arguments["speaker_label_overrides"])
+    if "vocabulary_replacements" in arguments:
+        validate_vocabulary_replacements(arguments["vocabulary_replacements"])
     return arguments
 
 
