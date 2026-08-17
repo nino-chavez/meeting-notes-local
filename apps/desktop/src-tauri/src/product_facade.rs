@@ -2,8 +2,7 @@
 //!
 //! `restore_withheld_turn` was registered on 2026-08-04 by the operator's
 //! correction-surface (J4) decision, with `DesktopProductCoordinator` as the
-//! storage-backed owner. It remains out of `tauri::generate_handler!` today:
-//! no rendered control invokes it yet.
+//! storage-backed owner.
 //!
 //! `regenerate_note` is registered in `tauri::generate_handler!` and, as of
 //! the generation invocation chain landing (docs/note-runtime-decision.md,
@@ -206,6 +205,15 @@ pub(crate) fn restore_withheld_turn(
     // recorder's own vocabulary instead of hanging the call.
     if crate::sitting_task_active(&app) {
         return Err("Finish the setup recording first.".into());
+    }
+    let capture = app
+        .model
+        .lock()
+        .map_err(|_| "Finish the current recording first.".to_owned())?
+        .reducer
+        .capture();
+    if capture != local_meeting_notes_session_core::reducer::CaptureState::Idle {
+        return Err("Finish the current recording first.".into());
     }
     let accepted = facade
         .restore_withheld_turn(RestoreWithheldTurnUiArgs {

@@ -277,6 +277,36 @@ export function transcriptTurnsMatching(turns, query) {
   ));
 }
 
+// A restore control is valid only for the exact meeting view that supplied
+// the digest and row index. The backend repeats these checks authoritatively;
+// this gate keeps stale or incomplete browser state from creating a request.
+export function withheldTurnPresentation(
+  turn,
+  {
+    meetingId = "",
+    meetingHandle = "",
+    transcriptMeetingId = "",
+    transcriptSha256 = "",
+    capture = "idle",
+  } = {},
+) {
+  const sourceTurnIndex = Number(turn?.sourceTurnIndex);
+  const digest = typeof transcriptSha256 === "string" ? transcriptSha256.trim() : "";
+  const valid = Boolean(turn?.withheld)
+    && typeof meetingId === "string"
+    && meetingId.length > 0
+    && typeof meetingHandle === "string"
+    && meetingHandle.length > 0
+    && transcriptMeetingId === meetingId
+    && /^[a-f0-9]{64}$/i.test(digest)
+    && Number.isInteger(sourceTurnIndex)
+    && sourceTurnIndex >= 0
+    && capture === "idle";
+  return valid
+    ? { action: "restore-withheld-turn", label: "Restore this turn", sourceTurnIndex }
+    : null;
+}
+
 // The generate control renders only from the note response's own eligibility
 // signal — the backend includes the source pin exactly when the facade would
 // admit the operation, so the browser never re-derives lifecycle rules. The

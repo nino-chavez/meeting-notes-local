@@ -5323,6 +5323,7 @@ fn main() {
             preview_delete_meeting_transcript,
             preview_delete_meeting,
             preview_library_open_evidence,
+            product_facade::restore_withheld_turn,
             product_facade::regenerate_note
         ])
         .setup(|app| {

@@ -17,6 +17,7 @@ import {
   transcriptTurnsForSourceSpeaker,
   transcriptTurnsMatching,
   transcriptionWorkerHeartbeatAgeSeconds,
+  withheldTurnPresentation,
 } from "./view-model.mjs";
 
 const root = document.querySelector("#app");
@@ -461,6 +462,15 @@ function renderTranscript(turns, title, detail = "", { copyAction = "", openFile
   const transcriptLines = visibleTurns.map((turn) => {
     const speakerLabel = transcriptSpeakerLabel(turn);
     const correctionAvailable = workspace && !turn.withheld && Boolean(state.selected?.transcript?.currentTranscriptSha256);
+    const restore = workspace
+      ? withheldTurnPresentation(turn, {
+        meetingId: state.selected?.row?.meetingId,
+        meetingHandle: state.selected?.row?.handle,
+        transcriptMeetingId: state.selected?.transcript?.meetingId,
+        transcriptSha256: state.selected?.transcript?.currentTranscriptSha256,
+        capture: state.snapshot?.capture,
+      })
+      : null;
     const correctionLabel = turn.speakerCorrected
       ? `Change speaker name. Currently ${speakerLabel}, corrected from ${turn.sourceSpeaker || "Unattributed"}.`
       : `Correct speaker name. Currently ${speakerLabel}.`;
@@ -473,6 +483,7 @@ function renderTranscript(turns, title, detail = "", { copyAction = "", openFile
             : `<span>${escapeHtml(speakerLabel)}</span>` : ""}
         </div>
         <p>${turn.withheld ? "This turn was withheld by the voice check." : escapeHtml(turn.text)}</p>
+        ${restore ? `<button class="button button-quiet button-small" type="button" data-action="restore-withheld-turn" data-source-turn-index="${escapeHtml(restore.sourceTurnIndex)}">${restore.label}</button>` : ""}
       </div>
     `;
   }).join("");
@@ -1095,6 +1106,31 @@ async function generateSelectedNote() {
   }
 }
 
+async function restoreSelectedWithheldTurn(sourceTurnIndex) {
+  const selection = state.selected;
+  const transcript = selection?.transcript;
+  const action = withheldTurnPresentation(
+    transcript?.turns?.find((turn) => Number(turn.sourceTurnIndex) === sourceTurnIndex),
+    {
+      meetingId: selection?.row?.meetingId,
+      meetingHandle: selection?.row?.handle,
+      transcriptMeetingId: transcript?.meetingId,
+      transcriptSha256: transcript?.currentTranscriptSha256,
+      capture: state.snapshot?.capture,
+    },
+  );
+  if (!action || !selection?.row?.meetingId || !transcript?.currentTranscriptSha256) return;
+  const meetingId = selection.row.meetingId;
+  await runBusy("restore-withheld-turn", async () => {
+    await invoke("restore_withheld_turn", {
+      meetingId,
+      sourceTranscriptSha256: transcript.currentTranscriptSha256,
+      sourceTurnIndex: action.sourceTurnIndex,
+    });
+    await reopenSelectedMeeting(meetingId);
+  });
+}
+
 function openMeetingRename() {
   const selection = state.selected;
   if (!selection) return;
@@ -1433,6 +1469,7 @@ function handleClick(event) {
   else if (action === "record-another") void recordAnother();
   else if (action === "open-meeting") void openMeeting(control.dataset.handle);
   else if (action === "open-speaker-correction") openSpeakerCorrection(Number(control.dataset.sourceTurnIndex));
+  else if (action === "restore-withheld-turn") void restoreSelectedWithheldTurn(Number(control.dataset.sourceTurnIndex));
   else if (action === "use-source-speaker" && state.speakerCorrection) {
     state.speakerCorrectionDraft = state.speakerCorrection.sourceLabel;
     render();

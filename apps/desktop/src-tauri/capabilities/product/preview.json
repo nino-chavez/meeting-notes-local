@@ -1,7 +1,7 @@
 {
   "$schema": "../../gen/schemas/desktop-schema.json",
   "identifier": "preview-window",
-  "description": "The local Preview build exercises the same meeting-notes flow as the shipped window, including naming a meeting, editable personal notes, bounded speaker-name correction, only the verified transcript file the operator selected, confirmed recording, transcript, or whole-meeting deletion, and regenerating a meeting note from its current transcript. It has no reference-interface, generic filesystem, shell, process, dialog, remote-origin, account, or cloud authority.",
+  "description": "The local Preview build exercises the same meeting-notes flow as the shipped window, including naming a meeting, editable personal notes, bounded speaker-name correction, restoring a verified withheld transcript turn without rewriting the source artifact, only the verified transcript file the operator selected, confirmed recording, transcript, or whole-meeting deletion, and regenerating a meeting note from its current transcript. It has no reference-interface, generic filesystem, shell, process, dialog, remote-origin, account, or cloud authority.",
   "windows": [
     "preview"
   ],
@@ -34,6 +34,7 @@
     "allow-operator-note",
     "allow-save-operator-note",
     "allow-open-current-transcript-file",
-    "allow-regenerate-note"
+    "allow-regenerate-note",
+    "allow-restore-withheld-turn"
   ]
 }

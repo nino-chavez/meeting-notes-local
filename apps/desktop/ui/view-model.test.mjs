@@ -21,6 +21,7 @@ import {
   transcriptTurnsForSourceSpeaker,
   transcriptTurnsMatching,
   transcriptionWorkerHeartbeatAgeSeconds,
+  withheldTurnPresentation,
 } from "./view-model.mjs";
 
 test("capture states lead with the actual next condition", () => {
@@ -161,6 +162,32 @@ test("transcript search only matches retained text", () => {
   assert.deepEqual(transcriptTurnsMatching(turns, "RELEASE"), [turns[0], turns[2]]);
   assert.deepEqual(transcriptTurnsMatching(turns, ""), turns);
   assert.deepEqual(transcriptTurnsMatching(null, "release"), []);
+});
+
+test("a withheld turn gets one restore action only in the current idle meeting", () => {
+  const context = {
+    meetingId: "m-1",
+    meetingHandle: "meeting-handle",
+    transcriptMeetingId: "m-1",
+    transcriptSha256: "a".repeat(64),
+    capture: "idle",
+  };
+  const turn = { sourceTurnIndex: 3, withheld: true };
+  assert.deepEqual(withheldTurnPresentation(turn, context), {
+    action: "restore-withheld-turn",
+    label: "Restore this turn",
+    sourceTurnIndex: 3,
+  });
+  for (const invalid of [
+    { ...context, meetingHandle: "" },
+    { ...context, transcriptMeetingId: "m-2" },
+    { ...context, transcriptSha256: "stale" },
+    { ...context, capture: "recording" },
+  ]) {
+    assert.equal(withheldTurnPresentation(turn, invalid), null);
+  }
+  assert.equal(withheldTurnPresentation({ ...turn, sourceTurnIndex: 3.5 }, context), null);
+  assert.equal(withheldTurnPresentation({ sourceTurnIndex: 3 }, context), null);
 });
 
 test("startup keeps polling until the app is ready", () => {
