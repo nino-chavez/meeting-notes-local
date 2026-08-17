@@ -143,7 +143,7 @@ fn seed(root: &Path, repository: PathBuf) -> Result<(), FixtureError> {
             "observations": {
                 "silence":{"status":"observed","detail":"synthetic"},
                 "clipping":{"status":"not_observed","detail":"synthetic"},
-                "low_input":{"status":"not_observed","detail":"synthetic"},
+                "low_input":{"status":"observed","detail":"synthetic"},
                 "background_noise":{"status":"unknown","detail":"synthetic"}
             }
         },
@@ -385,6 +385,15 @@ mod tests {
                 .observations
                 .iter()
                 .find(|observation| observation.kind == CaptureQualityObservationKind::Silence)
+                .unwrap()
+                .status,
+            CaptureQualityObservationStatus::Observed
+        );
+        assert_eq!(
+            quality
+                .observations
+                .iter()
+                .find(|observation| { observation.kind == CaptureQualityObservationKind::LowInput })
                 .unwrap()
                 .status,
             CaptureQualityObservationStatus::Observed
