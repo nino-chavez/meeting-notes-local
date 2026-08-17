@@ -5227,16 +5227,15 @@ fn local_vocabulary_sheet_response(
     turns: &[TranscriptTurn],
 ) -> Result<LocalVocabularySheetResponse, String> {
     let entries = vocabulary.list().map_err(local_vocabulary_error)?;
-    // A withheld row is deliberately an empty source input even if a later
-    // parser change were to carry text in memory. It cannot affect a count.
-    let source_turns = turns
-        .iter()
-        .map(|turn| if turn.withheld { "" } else { turn.text.as_str() })
-        .collect::<Vec<_>>();
-    let applications = vocabulary.project_turns(&source_turns).map_err(local_vocabulary_error)?;
     let mut applied_by_entry = HashMap::<Uuid, usize>::new();
-    for application in applications {
-        *applied_by_entry.entry(application.entry_id).or_default() += 1;
+    // This is a review-only count, not a note-generation frame. Project each
+    // retained turn so the count preserves its entry id without imposing the
+    // worker transport's 64-range ceiling. Withheld rows are never supplied to
+    // the store, even if a later parser accidentally carries text in memory.
+    for turn in turns.iter().filter(|turn| !turn.withheld) {
+        for application in vocabulary.project(&turn.text).map_err(local_vocabulary_error)?.applied {
+            *applied_by_entry.entry(application.entry_id).or_default() += 1;
+        }
     }
     Ok(LocalVocabularySheetResponse {
         entries: entries
@@ -9849,7 +9848,7 @@ mod tests {
             AudioState::Retained,
             json!([
                 {"start": 0.0, "end": 1.0, "speaker": "Me", "text": "Kibbel Report and Kibbel"},
-                {"start": 1.0, "end": 2.0, "speaker": "Them", "text": "Kibbel private", "gated": true, "gate_score": 0.1, "gate_reason": "fixture"}
+                {"start": 1.0, "end": 2.0, "speaker": "Me", "text": "Kibbel private", "gated": true, "gate_score": 0.1, "gate_reason": "fixture"}
             ]),
         );
         let directory = transcript_path.parent().unwrap().parent().unwrap();
@@ -9897,6 +9896,7 @@ mod tests {
 
         // A fresh process reads the same private store and re-derives the
         // count from the immutable, digest-bound projection.
+        drop(state);
         let restarted = vocabulary_command_state(&storage);
         let after_restart = local_vocabulary_list_for_test(meeting_id, &reference.sha256, &restarted).unwrap();
         assert_eq!(after_restart.entries.len(), 2);

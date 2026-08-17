@@ -862,6 +862,7 @@ function resetVocabularyDraft() {
   state.vocabulary = {
     ...state.vocabulary,
     editingId: "",
+    pendingDeleteId: "",
     sourcePhrase: "",
     preferredReplacement: "",
   };
@@ -927,9 +928,9 @@ function renderVocabularySheet() {
           <div class="vocabulary-ledger-terms"><span>${escapeHtml(entry.sourcePhrase)}</span><span aria-hidden="true">→</span><strong>${escapeHtml(entry.preferredReplacement)}</strong></div>
           <div class="vocabulary-ledger-meta"><span>${entry.enabled ? "Enabled" : "Disabled"}</span><span>${escapeHtml(use)}</span></div>
           <div class="vocabulary-ledger-actions">
-            <button class="text-button" type="button" data-action="edit-vocabulary" data-vocabulary-id="${escapeHtml(entry.id)}">Edit</button>
-            <button class="text-button" type="button" data-action="toggle-vocabulary" data-vocabulary-id="${escapeHtml(entry.id)}">${entry.enabled ? "Disable" : "Enable"}</button>
-            <button class="text-button vocabulary-delete" type="button" data-action="delete-vocabulary" data-vocabulary-id="${escapeHtml(entry.id)}">Delete</button>
+            ${vocabulary.pendingDeleteId === entry.id
+              ? `<span class="vocabulary-delete-confirmation" role="status">Delete this replacement?</span><button class="text-button" type="button" data-action="cancel-vocabulary-delete">Cancel</button><button class="text-button vocabulary-delete" type="button" data-action="confirm-vocabulary-delete" data-vocabulary-id="${escapeHtml(entry.id)}">Delete</button>`
+              : `<button class="text-button" type="button" data-action="edit-vocabulary" data-vocabulary-id="${escapeHtml(entry.id)}">Edit</button><button class="text-button" type="button" data-action="toggle-vocabulary" data-vocabulary-id="${escapeHtml(entry.id)}">${entry.enabled ? "Disable" : "Enable"}</button><button class="text-button vocabulary-delete" type="button" data-action="request-vocabulary-delete" data-vocabulary-id="${escapeHtml(entry.id)}">Delete</button>`}
           </div>
         </li>
       `;
@@ -939,7 +940,7 @@ function renderVocabularySheet() {
     <div class="modal-backdrop" role="presentation">
       <section class="start-sheet vocabulary-sheet" role="dialog" aria-modal="true" aria-labelledby="vocabulary-sheet-title">
         <div class="sheet-head">
-          <div><p class="eyebrow">Transcript vocabulary</p><h2 id="vocabulary-sheet-title">Keep exact words consistent.</h2><p>These local Before → After replacements apply to future review projections and note regenerations. They do not rewrite this transcript or regenerate a note.</p></div>
+          <div><p class="eyebrow">Transcript vocabulary</p><h2 id="vocabulary-sheet-title">Keep exact words consistent.</h2><p>These local Before → After replacements apply to future note regenerations. They do not rewrite this transcript, change the words shown here, or regenerate a note.</p></div>
           <button class="icon-button" type="button" data-action="close-modal" aria-label="Close vocabulary">×</button>
         </div>
         <section class="vocabulary-ledger" aria-labelledby="vocabulary-ledger-title">
@@ -971,16 +972,16 @@ function renderVocabularySheet() {
 async function saveVocabulary() {
   const vocabulary = state.vocabulary;
   if (!vocabulary || !vocabulary.sourcePhrase.trim() || !vocabulary.preferredReplacement.trim()) return;
-  const command = vocabulary.editingId ? "local_vocabulary_edit" : "local_vocabulary_add";
   const payload = {
     meetingId: vocabulary.meetingId,
     sourceTranscriptSha256: vocabulary.sourceTranscriptSha256,
     sourcePhrase: vocabulary.sourcePhrase.trim(),
     preferredReplacement: vocabulary.preferredReplacement.trim(),
   };
-  if (vocabulary.editingId) payload.id = vocabulary.editingId;
   await runBusy("vocabulary-save", async () => {
-    const response = await invoke(command, payload);
+    const response = vocabulary.editingId
+      ? await invoke("local_vocabulary_edit", { ...payload, id: vocabulary.editingId })
+      : await invoke("local_vocabulary_add", payload);
     if (state.vocabulary?.meetingId !== vocabulary.meetingId) return;
     state.vocabulary = { ...state.vocabulary, entries: response.entries || [], loading: false };
     resetVocabularyDraft();
@@ -994,6 +995,7 @@ function editVocabulary(id) {
   state.vocabulary = {
     ...state.vocabulary,
     editingId: id,
+    pendingDeleteId: "",
     sourcePhrase: entry.sourcePhrase,
     preferredReplacement: entry.preferredReplacement,
   };
@@ -1027,7 +1029,7 @@ async function deleteVocabulary(id) {
       id,
     });
     if (state.vocabulary?.meetingId === vocabulary.meetingId) {
-      state.vocabulary = { ...state.vocabulary, entries: response.entries || [], loading: false };
+      state.vocabulary = { ...state.vocabulary, entries: response.entries || [], loading: false, pendingDeleteId: "" };
       if (state.vocabulary.editingId === id) resetVocabularyDraft();
     }
   });
@@ -1673,11 +1675,19 @@ function handleClick(event) {
     render();
     queueMicrotask(() => root.querySelector("#vocabulary-before-input")?.focus());
   }
+  else if (action === "request-vocabulary-delete" && state.vocabulary) {
+    state.vocabulary = { ...state.vocabulary, pendingDeleteId: control.dataset.vocabularyId };
+    render();
+  }
+  else if (action === "cancel-vocabulary-delete" && state.vocabulary) {
+    state.vocabulary = { ...state.vocabulary, pendingDeleteId: "" };
+    render();
+  }
   else if (action === "toggle-vocabulary") {
     const entry = state.vocabulary?.entries?.find((candidate) => candidate.id === control.dataset.vocabularyId);
     if (entry) void setVocabularyEnabled(entry.id, !entry.enabled);
   }
-  else if (action === "delete-vocabulary") void deleteVocabulary(control.dataset.vocabularyId);
+  else if (action === "confirm-vocabulary-delete") void deleteVocabulary(control.dataset.vocabularyId);
   else if (action === "restore-withheld-turn") void restoreSelectedWithheldTurn(Number(control.dataset.sourceTurnIndex));
   else if (action === "use-source-speaker" && state.speakerCorrection) {
     state.speakerCorrectionDraft = state.speakerCorrection.sourceLabel;

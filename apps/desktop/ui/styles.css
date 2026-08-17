@@ -1647,6 +1647,12 @@ h3 {
   color: #a63d32;
 }
 
+.vocabulary-delete-confirmation {
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .vocabulary-ledger-empty {
   padding: 18px 13px;
   color: var(--ink-faint);
