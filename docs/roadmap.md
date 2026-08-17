@@ -1,6 +1,6 @@
 # Yawn product roadmap — trust before reach
 
-Status: active product direction as of 2026-08-16.
+Status: active product direction as of 2026-08-17.
 
 This roadmap sequences product work. It does not claim that a listed feature is
 shipped. The current product contract remains [the product brief](product-brief.md).
@@ -15,7 +15,9 @@ replacements reach future generated notes without changing the retained
 transcript. Recording-quality evidence and the source-bound transcription retry
 journey are now built in Preview. A reader can compare the current transcript
 with a separate retry, keep the current version, or promote the retry without
-silently regenerating the note. Live rendered verification remains open.
+silently regenerating the note. The exact fixture now proves the read-only
+review, quality, device, and playback states; mutation and production-package
+gates remain open.
 Cross-meeting questions can follow once the source record is reliable.
 Cloud accounts, automatic call detection, meeting bots, and live meeting chat do
 not enter the roadmap through competitor comparison alone.
@@ -82,7 +84,7 @@ The summary-first note is the baseline. It is not another roadmap item.
 | 1a | The reader can see who said what | Implemented in source and preview | Render the attribution already carried by each transcript turn |
 | 1b | The reader can correct who said what | Implemented, tested, and packaged in Preview; rendered save-and-regenerate journey pending | Never hide uncertainty or overwrite the source transcript |
 | 2 | Names and jargon stay correct across meetings | Review controls, bounded storage, and provenance-safe note application are implemented, tested, and packaged in Preview | Vocabulary remains local, visible, editable, and bounded |
-| 3 | The reader can tell whether the audio caused a bad transcript | Verified quality guidance, safe device context, retained-audio playback, and a source-bound retry comparison are implemented, tested, and packaged in Preview; rendered verification remains | Quality evidence stays distinct from capture-integrity evidence |
+| 3 | The reader can tell whether the audio caused a bad transcript | Quality guidance, bounded device context, retained-audio playback, and source-bound retry comparison are implemented, tested, and packaged in Preview; exact-fixture review states are rendered, while mutation and production-package gates remain | Quality evidence stays distinct from capture-integrity evidence |
 | 4 | Every recoverable problem leads to its exact repair | Existing recovery controls and the current stable reopen errors route to the selected meeting or Meetings; warnings without a real destination remain future work | Recovery actions must not imply that a failed operation succeeded |
 | 5 | The reader can find source passages across past meetings | Decision closed: keep semantic source finding out of the shipped interface until retrieval evidence establishes usefulness | Search remains local, source-linked, and unavailable during capture |
 
@@ -132,10 +134,10 @@ reopen the same meeting. The installed production app remains untouched.
 | Packet | Delivered foundation | Remaining product work |
 |---|---|---|
 | Vocabulary projection | Exact replacements travel as bounded original-source ranges. Changed-length prompt text maps evidence back to the retained transcript. The current store is re-attested before durable note replacement. | Dedicated controls and current-meeting application counts are now built. **Always correct this** remains a later shortcut into the same ledger. |
-| Recording-quality evidence | New capture receipts persist resolved microphone identity and a separate `capture-quality/1` block for silence, clipping, low input, and steady background energy. Legacy receipts report quality as unknown. | Reader-safe guidance, bounded device context, retained-audio playback, and versioned retry are now built. Rendered verification remains. |
+| Recording-quality evidence | New capture receipts persist resolved microphone identity and a separate `capture-quality/1` block for silence, clipping, low input, and steady background energy. Legacy receipts report quality as unknown. | Reader-safe guidance, bounded device context, retained-audio playback, and versioned retry are now built. Exact-fixture review states are rendered; mutation and production-package gates remain. |
 | Withheld-turn recovery | A valid withheld row now exposes one source-bound restore action. The command, capability, build contract, and shell contract are synchronized. | Add the remaining exact destinations only after their owning controls exist. |
 
-### Wave 2 integration — built, rendered gate pending
+### Wave 2 integration — built; exact-fixture state receipt recorded
 
 1. **Built and packaged in Preview:** expose local vocabulary through a small
    dedicated sheet. Keep every entry visible, editable, disableable, and local.
@@ -155,9 +157,11 @@ reopen the same meeting. The installed production app remains untouched.
    destinations exist. A button that opens a placeholder does not count as
    recovery.
 
-The remaining product work is now the rendered journey and warnings whose
-destinations do not exist yet. Those gates do not weaken the source-bound retry
-or playback contracts, but they keep these outcomes short of release.
+The remaining product work is now the state-changing journey and warnings whose
+destinations do not exist yet. The exact fixture renders the read-only retry,
+quality, device, and playback states, but Keep current, Use retry, speaker
+correction save, regeneration, generated-note/source-link, post-promotion,
+recovery-toast, and exact installed-production-package evidence remain open.
 
 ### Wave 3 decision — closed, do not ship yet
 
@@ -379,6 +383,30 @@ keep, promote, and post-promotion note state still lack rendered evidence. No
 real meeting audio was played, no private content was reproduced, no field was
 edited, and no permission was accepted to manufacture a passing check.
 
+**Rendered fixture receipt — 2026-08-17.** The exact signed `Yawn Fixture.app`
+with bundle id `com.ninochavez.local-meeting-notes.fixture` ran against the
+exact marker-bound root
+`/Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture`.
+The fixture contained only deterministic invented content and two 8-second
+silent WAVs. A verified public speech-model copy cleared startup. This is
+fixture evidence, not a release claim.
+
+The direct Computer Use walk observed Recent meetings, title search, opening
+the meeting detail, **No meeting note yet**, **Generate note** progressive
+**Full transcript**, separate personal notes, and a retry review. The retry
+modal showed current versus candidate transcript, silence and low-input
+caution, no material clipping issue, unavailable background-noise evidence,
+and a bounded device-identity disclaimer with no raw device name. **Decide
+later** closed without mutation and preserved **Review retry**. Microphone
+playback showed active state and **Stop**; explicit Stop returned **No recording
+is playing**. **Back** returned to the same Recent meetings list.
+
+Not observed and still open: **Keep current**, **Use retry** or promotion,
+speaker-correction save, regeneration, generated-note/source-link and
+post-promotion state, recovery-toast journeys, and the exact installed
+production package. No Settings change, permission change, recording, private
+content, or real meeting audio was used.
+
 **Developer ID-signed local-bundle receipt — 2026-08-17.** The unreleased source
 build at `target/release/bundle/macos/Yawn.app`, built from app source commit
 `97ff8c9`, passed the `internal-alpha` admission check. The bounded local lane
@@ -400,9 +428,9 @@ offline.
 **Remaining release gate.** The base completed-meeting reopen and Back journey
 now passes in the separately identified Preview package. The Developer
 ID-signed local bundle remains unnotarized and uninstalled. The remaining
-stateful journeys above require a disposable fixture or explicit human review,
-followed by the same walk against the exact installed production package,
-before these changes can be called shipped.
+stateful journeys above require a further disposable fixture or explicit human
+review, followed by the same walk against the exact installed production
+package, before these changes can be called shipped.
 
 **Remaining slice 1b gate.** Source acceptance is complete: note generation uses
 the corrected attribution while source links stay bound to the retained
@@ -492,7 +520,9 @@ note model. A recorded identity does not prove that it was the intended input.
 identity, and a separate quality block. Meeting review exposes only verified,
 product-authored quality guidance. The retry comparison, explicit keep or
 promote decisions, retained-audio playback, and bounded device explanation are
-built and packaged in Preview. The rendered journey remains open.
+built and packaged in Preview. The exact fixture renders the read-only review,
+quality, device, and playback states. Keep-or-promote mutation, note
+regeneration, and exact installed-production-package verification remain open.
 
 **Scope.**
 
