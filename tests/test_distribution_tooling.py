@@ -177,6 +177,10 @@ class DistributionToolingTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                "Developer ID timestamping may contact Apple; notarization and packaging are disabled",
+                result.stdout,
+            )
             calls = log.read_text()
             self.assertIn("codesign --force --options runtime", calls)
             self.assertIn("verify-release-bundle.py", calls)

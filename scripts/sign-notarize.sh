@@ -93,6 +93,8 @@ IDENTITY="$(identity)"
 if [[ "$LOCAL_ONLY" == "0" ]]; then
   xcrun notarytool history --keychain-profile "$PROFILE" --output-format json \
     >/dev/null 2>&1 || die "notary profile $PROFILE is missing or rejected"
+else
+  echo "local lane: Developer ID timestamping may contact Apple; notarization and packaging are disabled"
 fi
 echo "identity: $IDENTITY"
 
