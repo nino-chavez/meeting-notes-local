@@ -6,8 +6,8 @@
 
 use std::env;
 use std::fs;
-use std::io;
-use std::os::unix::fs::PermissionsExt;
+use std::io::{self, Read, Write};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use local_meeting_notes_session_core::meeting::{
@@ -16,8 +16,14 @@ use local_meeting_notes_session_core::meeting::{
     MeetingRecord, MeetingSchema,
 };
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
+use local_meeting_notes_session_core::model_store::{
+    activate_model, install_receipt_bytes, verify_model_directory, ModelCatalog, ModelStoreError,
+    TranscriptModelFileRole,
+};
+use local_meeting_notes_session_core::retention::{AppDataWriterLock, AppDataWriterLockError};
+use local_meeting_notes_session_core::runtime::{RuntimeError, RuntimeManifest};
 use local_meeting_notes_session_core::storage::{
-    create_private_dir, durable_create_new, StorageRoot,
+    create_private_dir, durable_create_new, sync_directory, StorageRoot,
 };
 use local_meeting_notes_session_core::transcript_retry::{
     TranscriptRetryAuthority, TranscriptRetrySourceBinding,
@@ -59,25 +65,68 @@ enum FixtureError {
     Storage(#[from] local_meeting_notes_session_core::storage::StorageError),
     #[error(transparent)]
     Retry(#[from] local_meeting_notes_session_core::transcript_retry::TranscriptRetryError),
+    #[error("fixture root marker is missing or not the exact synthetic marker")]
+    InvalidMarker,
+    #[error("model install path is unsafe: {0}")]
+    UnsafeInstallPath(String),
+    #[error("bundle runtime manifest has no verified model catalog")]
+    MissingModelCatalog,
+    #[error("selected model is not a transcript model in the verified catalog")]
+    UnknownModel,
+    #[error("a model or active-model pointer already exists")]
+    ExistingModel,
+    #[error("source model changed during the bounded copy")]
+    SourceChanged,
+    #[error(transparent)]
+    Runtime(#[from] RuntimeError),
+    #[error(transparent)]
+    ModelStore(#[from] ModelStoreError),
+    #[error(transparent)]
+    WriterLock(#[from] AppDataWriterLockError),
 }
 
 fn main() {
     let mut args = env::args().skip(1);
-    let Some(root) = args.next() else {
+    let Some(first) = args.next() else {
         eprintln!("usage: rendered-review-fixture /absolute/path/{BUNDLE_NAME}");
         std::process::exit(2);
     };
-    if args.next().is_some() {
+    let result = if first == "install-model" {
+        let root = args.next();
+        let bundle = args.next();
+        let source = args.next();
+        let model_id = args.next();
+        if args.next().is_some()
+            || root.is_none()
+            || bundle.is_none()
+            || source.is_none()
+            || model_id.is_none()
+        {
+            eprintln!("usage: rendered-review-fixture install-model ROOT BUNDLE_RESOURCES SOURCE_MODEL_DIR MODEL_ID");
+            std::process::exit(2);
+        }
+        install_model(
+            Path::new(root.as_deref().expect("checked root")),
+            Path::new(bundle.as_deref().expect("checked bundle")),
+            Path::new(source.as_deref().expect("checked source")),
+            model_id.as_deref().expect("checked model id"),
+            repository_root(),
+        )
+    } else if args.next().is_some() {
         eprintln!("usage: rendered-review-fixture /absolute/path/{BUNDLE_NAME}");
         std::process::exit(2);
-    }
-
-    let root = PathBuf::from(root);
-    if let Err(error) = seed(&root, repository_root()) {
+    } else {
+        seed(Path::new(&first), repository_root())
+    };
+    if let Err(error) = result {
         eprintln!("rendered-review-fixture: {error}");
         std::process::exit(1);
     }
-    println!("seeded synthetic fixture at {}", root.display());
+    if first == "install-model" {
+        println!("installed verified synthetic model");
+    } else {
+        println!("seeded synthetic fixture at {first}");
+    }
 }
 
 fn repository_root() -> PathBuf {
@@ -233,6 +282,253 @@ fn seed(root: &Path, repository: PathBuf) -> Result<(), FixtureError> {
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SyntheticFixtureMarker {
+    schema: String,
+    bundle: String,
+    private_data: bool,
+    product_evidence: bool,
+    content: String,
+    meeting_id: String,
+    retry_operation_id: String,
+    covered_states: Vec<String>,
+    note: String,
+}
+
+fn install_model(
+    root: &Path,
+    bundle_resources: &Path,
+    source_model_dir: &Path,
+    model_id: &str,
+    repository: PathBuf,
+) -> Result<(), FixtureError> {
+    validate_install_root(root, &repository)?;
+    validate_external_directory(bundle_resources, "bundle resources")?;
+    validate_external_directory(source_model_dir, "source model")?;
+    if source_model_dir.starts_with(&repository.canonicalize().unwrap_or(repository.clone())) {
+        return Err(FixtureError::UnsafeInstallPath(
+            "source model is inside the source repository".into(),
+        ));
+    }
+
+    let manifest_path = bundle_resources.join("app-runtime.json");
+    let manifest = RuntimeManifest::load_and_verify(&manifest_path)?;
+    let catalog_resource = manifest
+        .model_catalog
+        .as_ref()
+        .ok_or(FixtureError::MissingModelCatalog)?;
+    let catalog_path = manifest
+        .model_catalog_path(&manifest_path)
+        .ok_or(FixtureError::MissingModelCatalog)?;
+    let catalog = ModelCatalog::load_and_verify(&catalog_path, &catalog_resource.sha256)?;
+    let entry = catalog
+        .model(model_id)
+        .map_err(|_| FixtureError::UnknownModel)?
+        .clone();
+    if source_model_dir.file_name().and_then(|name| name.to_str()) != Some(entry.revision.as_str())
+        || source_model_dir
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            != Some(entry.id.as_str())
+    {
+        return Err(FixtureError::UnsafeInstallPath(
+            "source model leaf must be exactly <id>/<revision>".into(),
+        ));
+    }
+
+    let storage = StorageRoot::create(root, &repository)?;
+    let active_path = storage
+        .resolve(Path::new("models/active-model.json"))
+        .map_err(|error| FixtureError::Storage(error))?;
+    if fs::symlink_metadata(&active_path).is_ok() {
+        return Err(FixtureError::ExistingModel);
+    }
+    let target = storage
+        .resolve(&Path::new("models").join(&entry.id).join(&entry.revision))
+        .map_err(FixtureError::Storage)?;
+    if fs::symlink_metadata(&target).is_ok()
+        || fs::symlink_metadata(&storage.path().join("MODEL_FIXTURE.json")).is_ok()
+    {
+        return Err(FixtureError::ExistingModel);
+    }
+
+    // Keep the canonical writer boundary through copy, re-verification, and
+    // activation. A live app cannot race this fixture install.
+    let _writer_lock = AppDataWriterLock::acquire(&storage)?;
+    if fs::symlink_metadata(&active_path).is_ok()
+        || fs::symlink_metadata(&target).is_ok()
+        || fs::symlink_metadata(&storage.path().join("MODEL_FIXTURE.json")).is_ok()
+    {
+        return Err(FixtureError::ExistingModel);
+    }
+    verify_model_directory(source_model_dir, &entry).map_err(|_| FixtureError::SourceChanged)?;
+    create_private_dir(&target)?;
+    for file in &entry.files {
+        if !matches!(
+            file.role,
+            TranscriptModelFileRole::Config | TranscriptModelFileRole::Weights
+        ) {
+            return Err(FixtureError::ModelStore(
+                ModelStoreError::InvalidCatalogEntry,
+            ));
+        }
+        copy_private_model_file(
+            &source_model_dir.join(&file.name),
+            &target.join(&file.name),
+            file.bytes,
+        )?;
+    }
+    durable_create_new(
+        &target.join("model-install.json"),
+        &install_receipt_bytes(&entry),
+    )?;
+    sync_directory(&target)?;
+    verify_model_directory(&target, &entry)?;
+    verify_model_directory(source_model_dir, &entry).map_err(|_| FixtureError::SourceChanged)?;
+
+    let model_marker = json!({
+        "schema": "synthetic-model-fixture/1",
+        "model_id": entry.id,
+        "revision": entry.revision,
+        "private_data": false,
+        "product_evidence": false,
+        "note": "Public model bytes copied from a verified catalog entry for synthetic fixture review."
+    });
+    durable_create_new(
+        &storage.path().join("MODEL_FIXTURE.json"),
+        &serde_json::to_vec_pretty(&model_marker)?,
+    )?;
+    activate_model(&storage, &entry)?;
+    Ok(())
+}
+
+fn validate_install_root(root: &Path, repository: &Path) -> Result<(), FixtureError> {
+    if !root.is_absolute() || root.file_name().and_then(|name| name.to_str()) != Some(BUNDLE_NAME) {
+        return Err(FixtureError::WrongRootName);
+    }
+    let metadata = fs::symlink_metadata(root).map_err(|_| FixtureError::UnsafeDirectory)?;
+    if metadata.file_type().is_symlink() {
+        return Err(FixtureError::Symlink);
+    }
+    if !metadata.file_type().is_dir() || metadata.permissions().mode() & 0o777 != 0o700 {
+        return Err(FixtureError::UnsafeDirectory);
+    }
+    let parent = root
+        .parent()
+        .ok_or(FixtureError::BroadRoot)?
+        .canonicalize()
+        .unwrap_or_else(|_| root.parent().unwrap().to_path_buf());
+    if [
+        "/",
+        "/tmp",
+        "/private/tmp",
+        "/Users",
+        "/Users/nino",
+        "/Users/nino/Workspace",
+        "/Users/nino/Workspace/dev",
+        "/Users/nino/Workspace/dev/apps",
+    ]
+    .iter()
+    .any(|broad| parent == Path::new(broad))
+    {
+        return Err(FixtureError::BroadRoot);
+    }
+    let repository = repository
+        .canonicalize()
+        .unwrap_or_else(|_| repository.to_path_buf());
+    if root.starts_with(&repository) || parent.starts_with(&repository) {
+        return Err(FixtureError::InsideRepository);
+    }
+    let marker_path = root.join("SYNTHETIC_FIXTURE.json");
+    let marker_metadata =
+        fs::symlink_metadata(&marker_path).map_err(|_| FixtureError::InvalidMarker)?;
+    if marker_metadata.file_type().is_symlink()
+        || !marker_metadata.file_type().is_file()
+        || marker_metadata.permissions().mode() & 0o777 != 0o600
+    {
+        return Err(FixtureError::InvalidMarker);
+    }
+    let marker: SyntheticFixtureMarker = serde_json::from_slice(&fs::read(&marker_path)?)
+        .map_err(|_| FixtureError::InvalidMarker)?;
+    if marker.schema != "synthetic-fixture-evidence/1"
+        || marker.bundle != BUNDLE_NAME
+        || marker.private_data
+        || marker.product_evidence
+        || marker.content != "deterministic invented review fixture"
+        || marker.meeting_id != MEETING_ID
+        || marker.retry_operation_id != OPERATION_ID
+        || marker.covered_states
+            != vec![
+                "retained meeting",
+                "verified audio",
+                "quality and device projections",
+                "pending transcript retry",
+            ]
+        || marker.note
+            != "No generated note is seeded; this fixture remains TranscriptReady and does not invoke a note worker."
+    {
+        return Err(FixtureError::InvalidMarker);
+    }
+    if fs::symlink_metadata(root.join("MODEL_FIXTURE.json")).is_ok() {
+        return Err(FixtureError::ExistingModel);
+    }
+    Ok(())
+}
+
+fn validate_external_directory(path: &Path, label: &str) -> Result<(), FixtureError> {
+    if !path.is_absolute() {
+        return Err(FixtureError::UnsafeInstallPath(format!(
+            "{label} must be absolute"
+        )));
+    }
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| FixtureError::UnsafeInstallPath(format!("{label} is missing")))?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(FixtureError::UnsafeInstallPath(format!(
+            "{label} must be a nonsymlink directory"
+        )));
+    }
+    Ok(())
+}
+
+fn copy_private_model_file(
+    source: &Path,
+    target: &Path,
+    expected_bytes: u64,
+) -> Result<(), FixtureError> {
+    let mut input = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(source)
+        .map_err(FixtureError::Io)?;
+    let metadata = input.metadata()?;
+    if !metadata.file_type().is_file() || metadata.len() != expected_bytes {
+        return Err(FixtureError::SourceChanged);
+    }
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(target)?;
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut copied = 0_u64;
+    loop {
+        let read = input.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        output.write_all(&buffer[..read])?;
+        copied = copied.saturating_add(read as u64);
+    }
+    if copied != expected_bytes {
+        return Err(FixtureError::SourceChanged);
+    }
+    output.sync_all()?;
+    Ok(())
+}
+
 fn validate_root(root: &Path, repository: &Path) -> Result<(), FixtureError> {
     if !root.is_absolute() {
         return Err(FixtureError::RelativeRoot);
@@ -349,7 +645,11 @@ mod tests {
         CaptureQualityObservationStatus, CaptureQualityState, RecordingDeviceState,
     };
     use local_meeting_notes_session_core::meeting::verify_artifact_ref;
+    use local_meeting_notes_session_core::model_store::{
+        active_model, ModelCatalogSchema, TranscriptModel, TranscriptModelFile,
+    };
     use local_meeting_notes_session_core::transcript_retry::TranscriptRetryState;
+    use std::os::unix::fs::PermissionsExt;
 
     fn target(temp: &TempDir) -> PathBuf {
         temp.path().join(BUNDLE_NAME)
@@ -507,6 +807,167 @@ mod tests {
         assert!(matches!(
             validate_root(&existing, &existing_repository),
             Err(FixtureError::ExistingData)
+        ));
+    }
+
+    fn write_bundle_file(path: &Path, bytes: &[u8]) -> String {
+        fs::write(path, bytes).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        digest(bytes)
+    }
+
+    fn install_inputs(
+        temp: &TempDir,
+    ) -> (
+        PathBuf,
+        PathBuf,
+        PathBuf,
+        PathBuf,
+        TranscriptModel,
+        Vec<u8>,
+        Vec<u8>,
+    ) {
+        let root = target(temp);
+        let repository = repo(temp);
+        seed(&root, repository.clone()).unwrap();
+
+        let model_id = "fixture-model";
+        let revision = "a".repeat(40);
+        let config = br#"{"model":"fixture"}
+"#
+        .to_vec();
+        let weights = b"synthetic weights".to_vec();
+        let entry = TranscriptModel {
+            id: model_id.into(),
+            revision: revision.clone(),
+            title: "Synthetic transcript model".into(),
+            detail: "Public bytes for fixture review.".into(),
+            download_bytes: (config.len() + weights.len()) as u64,
+            installed_bytes: (config.len() + weights.len()) as u64,
+            files: vec![
+                TranscriptModelFile {
+                    role: TranscriptModelFileRole::Config,
+                    name: "config.json".into(),
+                    url: format!("https://models.example/{revision}/config.json"),
+                    bytes: config.len() as u64,
+                    sha256: digest(&config),
+                },
+                TranscriptModelFile {
+                    role: TranscriptModelFileRole::Weights,
+                    name: "weights.safetensors".into(),
+                    url: format!("https://models.example/{revision}/weights.safetensors"),
+                    bytes: weights.len() as u64,
+                    sha256: digest(&weights),
+                },
+            ],
+        };
+        let bundle = temp.path().join("bundle");
+        create_private_dir(&bundle).unwrap();
+        let catalog_bytes = serde_json::to_vec_pretty(&ModelCatalog {
+            schema: ModelCatalogSchema::V1,
+            models: vec![entry.clone()],
+            note_models: Vec::new(),
+        })
+        .unwrap();
+        let catalog_digest = write_bundle_file(&bundle.join("model-catalog.json"), &catalog_bytes);
+        for (name, bytes) in [
+            ("runtime", b"runtime".as_slice()),
+            ("worker", b"worker".as_slice()),
+            ("tap", b"tap".as_slice()),
+            ("encoder", b"encoder".as_slice()),
+            ("permission-probe", b"probe".as_slice()),
+        ] {
+            write_bundle_file(&bundle.join(name), bytes);
+        }
+        let manifest = json!({
+            "schema":"app-runtime/2", "admission":"product",
+            "runtime":{"path":"runtime","sha256":digest(b"runtime")},
+            "worker":{"path":"worker","sha256":digest(b"worker")},
+            "tap":{"path":"tap","sha256":digest(b"tap")},
+            "encoder":{"path":"encoder","sha256":digest(b"encoder")},
+            "permission_probe":{"path":"permission-probe","sha256":digest(b"probe")},
+            "model_catalog":{"path":"model-catalog.json","sha256":catalog_digest},
+            "models":[]
+        });
+        write_bundle_file(
+            &bundle.join("app-runtime.json"),
+            &serde_json::to_vec_pretty(&manifest).unwrap(),
+        );
+
+        let source = temp.path().join(model_id).join(&revision);
+        create_private_dir(source.parent().unwrap()).unwrap();
+        create_private_dir(&source).unwrap();
+        write_bundle_file(&source.join("config.json"), &config);
+        write_bundle_file(&source.join("weights.safetensors"), &weights);
+        write_bundle_file(
+            &source.join("model-install.json"),
+            &install_receipt_bytes(&entry),
+        );
+        (root, repository, bundle, source, entry, config, weights)
+    }
+
+    #[test]
+    fn install_model_copies_verified_public_bytes_and_activates_exact_entry() {
+        let temp = TempDir::new().unwrap();
+        let (root, repository, bundle, source, entry, config, weights) = install_inputs(&temp);
+        install_model(&root, &bundle, &source, &entry.id, repository.clone()).unwrap();
+
+        let storage = StorageRoot::create(&root, &repository).unwrap();
+        let catalog = ModelCatalog {
+            schema: ModelCatalogSchema::V1,
+            models: vec![entry.clone()],
+            note_models: Vec::new(),
+        };
+        assert_eq!(
+            active_model(&storage, &catalog).unwrap().unwrap().revision,
+            entry.revision
+        );
+        let target = storage
+            .path()
+            .join("models")
+            .join(&entry.id)
+            .join(&entry.revision);
+        assert_eq!(fs::read(target.join("config.json")).unwrap(), config);
+        assert_eq!(
+            fs::read(target.join("weights.safetensors")).unwrap(),
+            weights
+        );
+        verify_model_directory(&target, &entry).unwrap();
+        let model_marker = fs::read_to_string(storage.path().join("MODEL_FIXTURE.json")).unwrap();
+        assert!(model_marker.contains(&entry.id));
+        assert!(!model_marker.contains(source.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn install_model_refuses_wrong_marker_existing_target_and_changed_source() {
+        let temp = TempDir::new().unwrap();
+        let (root, repository, bundle, source, entry, _, _) = install_inputs(&temp);
+        fs::write(root.join("SYNTHETIC_FIXTURE.json"), b"{}").unwrap();
+        fs::set_permissions(
+            root.join("SYNTHETIC_FIXTURE.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        assert!(matches!(
+            install_model(&root, &bundle, &source, &entry.id, repository.clone()),
+            Err(FixtureError::InvalidMarker)
+        ));
+
+        let temp = TempDir::new().unwrap();
+        let (root, repository, bundle, source, entry, _, _) = install_inputs(&temp);
+        let target = root.join("models").join(&entry.id).join(&entry.revision);
+        create_private_dir(&target).unwrap();
+        assert!(matches!(
+            install_model(&root, &bundle, &source, &entry.id, repository.clone()),
+            Err(FixtureError::ExistingModel)
+        ));
+
+        let temp = TempDir::new().unwrap();
+        let (root, repository, bundle, source, entry, _, _) = install_inputs(&temp);
+        fs::write(source.join("weights.safetensors"), b"changed").unwrap();
+        assert!(matches!(
+            install_model(&root, &bundle, &source, &entry.id, repository),
+            Err(FixtureError::SourceChanged)
         ));
     }
 }
