@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -19,6 +20,7 @@ import {
   shouldPollSnapshot,
   transcriptPlainText,
   transcriptSpeakerLabel,
+  transcriptRetryPresentation,
   transcriptTurnsForSourceSpeaker,
   transcriptTurnsMatching,
   transcriptionWorkerHeartbeatAgeSeconds,
@@ -212,6 +214,76 @@ test("vocabulary only opens for the exact idle transcript projection", () => {
   ]) {
     assert.equal(localVocabularyPresentation(invalid), null);
   }
+});
+
+test("transcript retry is offered only for a stable retained transcript", () => {
+  const eligible = {
+    meetingId: "m-1",
+    transcriptMeetingId: "m-1",
+    sourceTranscriptSha256: "a".repeat(64),
+    audioRetentionState: "retained",
+    capture: "idle",
+  };
+  assert.deepEqual(transcriptRetryPresentation(eligible), {
+    action: "start-transcript-retry",
+    label: "Retry transcript",
+    meetingId: "m-1",
+    sourceTranscriptSha256: "a".repeat(64),
+    pending: null,
+  });
+  for (const invalid of [
+    { ...eligible, transcriptMeetingId: "m-2" },
+    { ...eligible, sourceTranscriptSha256: "stale" },
+    { ...eligible, audioRetentionState: "released" },
+    { ...eligible, capture: "recording" },
+    { ...eligible, recovery: { state: "transcript-unavailable" } },
+  ]) {
+    assert.equal(transcriptRetryPresentation(invalid), null);
+  }
+});
+
+test("a retry candidate resumes only when it is bound to the current transcript", () => {
+  const context = {
+    meetingId: "m-1",
+    transcriptMeetingId: "m-1",
+    sourceTranscriptSha256: "a".repeat(64),
+    audioRetentionState: "retained",
+    capture: "idle",
+  };
+  const pending = {
+    meetingId: "m-1",
+    operationId: "op-1",
+    sourceTranscriptSha256: "a".repeat(64),
+    candidateTranscriptSha256: "b".repeat(64),
+  };
+  const presentation = transcriptRetryPresentation({ ...context, pending });
+  assert.equal(presentation.label, "Review retry");
+  assert.equal(presentation.pending, pending);
+  assert.equal(transcriptRetryPresentation({ ...context, pending: { ...pending, sourceTranscriptSha256: "c".repeat(64) } }).pending, null);
+});
+
+test("retry comparison UI keeps the decision explicit and uses exact backend commands", async () => {
+  const source = await readFile(new URL("./main.js", import.meta.url), "utf8");
+  assert.match(source, /invoke\("transcript_retry_pending", \{\s*meetingId: retry\.meetingId,\s*sourceTranscriptSha256: retry\.sourceTranscriptSha256,/);
+  assert.match(source, /invoke\("transcript_retry_start", \{\s*meetingId: retry\.meetingId,\s*sourceTranscriptSha256: retry\.sourceTranscriptSha256,/);
+  assert.match(source, /invoke\("transcript_retry_decide", \{\s*meetingId: retry\.meetingId,\s*operationId: retry\.operationId,\s*sourceTranscriptSha256: retry\.sourceTranscriptSha256,\s*candidateTranscriptSha256: retry\.candidateTranscriptSha256,\s*decision,/);
+  assert.match(source, /decideTranscriptRetry\("keep-current"\)/);
+  assert.match(source, /decideTranscriptRetry\("use-retry"\)/);
+  assert.match(source, /data-action="decide-retry-later"/);
+  assert.match(source, /else if \(action === "decide-retry-later"\) \{\s*closeModal\(\);\s*render\(\);\s*\}/);
+  assert.match(source, /The retained transcript stays as it is unless you explicitly use this retry\./);
+  assert.match(source, /current generated note\.\s*<\/h3><p>You will need to regenerate the note/);
+  assert.match(source, /state\.transcriptRetry = \{ \.\.\.retry, phase: "starting" \}/);
+  assert.match(source, /catch \(error\) \{\s*if \(state\.selected === selection\) state\.transcriptRetry = null;\s*reportError\(error\);/);
+});
+
+test("retry comparison redacts withheld text and keeps the summary before personal notes", async () => {
+  const source = await readFile(new URL("./main.js", import.meta.url), "utf8");
+  assert.match(source, /turn\.withheld \? "This turn was withheld by the voice check\." : escapeHtml\(turn\.text\)/);
+  assert.match(source, /renderMeetingNote\(note, claimEvidence\)\}\n\s*\$\{renderTranscriptRetryAction\(note, transcript, recovery\)\}\n\s*\$\{renderTranscriptDisclosure\(transcript, recovery\)\}/);
+  assert.match(source, /<aside class="meeting-notes-pane">\s*<section class="note-section your-notes-section"/);
+  assert.match(source, /Capture-quality details are unavailable for this retry\./);
+  assert.match(source, /function renderRetryWarnings\(warnings, label\)/);
 });
 
 test("startup keeps polling until the app is ready", () => {

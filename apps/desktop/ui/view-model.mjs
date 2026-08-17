@@ -327,6 +327,44 @@ export function localVocabularyPresentation({
     : null;
 }
 
+// Transcript retry is available only from the exact, retained transcript the
+// reader is already reviewing. A pending candidate is still bound to that
+// source; it is not an instruction to promote anything automatically.
+export function transcriptRetryPresentation({
+  meetingId = "",
+  transcriptMeetingId = "",
+  sourceTranscriptSha256 = "",
+  audioRetentionState = "",
+  capture = "",
+  recovery = null,
+  pending = null,
+} = {}) {
+  const digest = typeof sourceTranscriptSha256 === "string" ? sourceTranscriptSha256.trim() : "";
+  const eligible = typeof meetingId === "string"
+    && meetingId.length > 0
+    && transcriptMeetingId === meetingId
+    && /^[a-f0-9]{64}$/i.test(digest)
+    && audioRetentionState === "retained"
+    && capture === "idle"
+    && !recovery;
+  if (!eligible) return null;
+
+  const resumesPending = pending
+    && pending.meetingId === meetingId
+    && pending.sourceTranscriptSha256 === digest
+    && typeof pending.operationId === "string"
+    && pending.operationId.length > 0
+    && typeof pending.candidateTranscriptSha256 === "string"
+    && /^[a-f0-9]{64}$/i.test(pending.candidateTranscriptSha256);
+  return {
+    action: "start-transcript-retry",
+    label: resumesPending ? "Review retry" : "Retry transcript",
+    meetingId,
+    sourceTranscriptSha256: digest,
+    pending: resumesPending ? pending : null,
+  };
+}
+
 // The generate control renders only from the note response's own eligibility
 // signal — the backend includes the source pin exactly when the facade would
 // admit the operation, so the browser never re-derives lifecycle rules. The

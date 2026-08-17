@@ -15,6 +15,7 @@ import {
   shouldPollSnapshot,
   transcriptPlainText,
   transcriptSpeakerLabel,
+  transcriptRetryPresentation,
   transcriptTurnsForSourceSpeaker,
   transcriptTurnsMatching,
   transcriptionWorkerHeartbeatAgeSeconds,
@@ -49,6 +50,7 @@ const state = {
   snapshot: null,
   speakerCorrection: null,
   speakerCorrectionDraft: "",
+  transcriptRetry: null,
   vocabulary: null,
   transcriptActionStatus: {},
   transcriptQuery: "",
@@ -170,6 +172,7 @@ function render() {
       ${state.modal === "start" ? renderStartSheet() : ""}
       ${state.modal === "rename-meeting" ? renderRenameMeetingSheet() : ""}
       ${state.modal === "speaker-correction" ? renderSpeakerCorrectionSheet() : ""}
+      ${state.modal === "transcript-retry" ? renderTranscriptRetrySheet() : ""}
       ${state.modal === "vocabulary" ? renderVocabularySheet() : ""}
       ${["delete-recording", "delete-transcript", "delete-meeting"].includes(state.modal) ? renderMeetingDeletionSheet() : ""}
       ${state.notice ? `<aside class="toast toast-notice" role="status"><button type="button" data-action="clear-notice" aria-label="Dismiss">×</button>${escapeHtml(state.notice)}</aside>` : ""}
@@ -624,6 +627,43 @@ function renderMeetingRecovery(recovery) {
   `;
 }
 
+function transcriptRetryContext(note, transcript, pending = null) {
+  return transcriptRetryPresentation({
+    meetingId: note?.meetingId || state.selected?.row?.meetingId || "",
+    transcriptMeetingId: transcript?.meetingId || "",
+    sourceTranscriptSha256: transcript?.currentTranscriptSha256 || "",
+    audioRetentionState: note?.audioRetention?.state || "",
+    capture: state.snapshot?.capture || "",
+    recovery: meetingRecoveryPresentation(note, transcript, state.generatingMeetingId),
+    pending,
+  });
+}
+
+function renderTranscriptRetryAction(note, transcript, recovery) {
+  const retry = transcriptRetryPresentation({
+    meetingId: note?.meetingId || state.selected?.row?.meetingId || "",
+    transcriptMeetingId: transcript?.meetingId || "",
+    sourceTranscriptSha256: transcript?.currentTranscriptSha256 || "",
+    audioRetentionState: note?.audioRetention?.state || "",
+    capture: state.snapshot?.capture || "",
+    recovery,
+    pending: state.selected?.transcriptRetry || null,
+  });
+  if (!retry) return "";
+  const starting = state.transcriptRetry?.phase === "starting";
+  return `
+    <section class="transcript-retry-action" aria-labelledby="transcript-retry-heading">
+      <div>
+        <h3 id="transcript-retry-heading">Transcript retry</h3>
+        <p>${retry.pending
+    ? "A retry is ready to review. Keep the retained transcript or explicitly use the retry."
+    : "Run a local retry, then compare it with the retained transcript before deciding."}</p>
+      </div>
+      <button class="button button-quiet button-small" id="transcript-retry-action" type="button" data-action="${retry.action}" ${starting ? "disabled" : ""}>${starting ? "Preparing retry…" : escapeHtml(retry.label)}</button>
+    </section>
+  `;
+}
+
 function renderMeeting() {
   const { row, note, transcript } = state.selected;
   const title = row.label || `Meeting · ${dateLabel(row.createdAtEpochSeconds)}`;
@@ -676,6 +716,7 @@ function renderMeeting() {
       <div class="meeting-workspace">
         <main class="meeting-source-pane">
           ${renderMeetingNote(note, claimEvidence)}
+          ${renderTranscriptRetryAction(note, transcript, recovery)}
           ${renderTranscriptDisclosure(transcript, recovery)}
         </main>
         <aside class="meeting-notes-pane">
@@ -869,10 +910,13 @@ function resetVocabularyDraft() {
 }
 
 function closeModal() {
+  const retryOpen = state.modal === "transcript-retry";
   state.modal = "";
   state.speakerCorrection = null;
   state.speakerCorrectionDraft = "";
+  state.transcriptRetry = null;
   state.vocabulary = null;
+  if (retryOpen) queueMicrotask(() => root.querySelector("#transcript-retry-action")?.focus());
 }
 
 async function openVocabulary() {
@@ -964,6 +1008,84 @@ function renderVocabularySheet() {
             <button class="button button-primary" type="submit" ${saving || !vocabulary.sourcePhrase.trim() || !vocabulary.preferredReplacement.trim() ? "disabled" : ""}>${saving ? "Saving…" : editing ? "Save replacement" : "Add replacement"}</button>
           </div>
         </form>
+      </section>
+    </div>
+  `;
+}
+
+function retryWarningText(warning) {
+  if (typeof warning === "string") return warning;
+  if (warning && typeof warning.message === "string") return warning.message;
+  return "Yawn reported a warning for this transcript.";
+}
+
+function renderRetryWarnings(warnings, label) {
+  if (!Array.isArray(warnings) || !warnings.length) return "";
+  return `<section class="retry-warnings" aria-label="${escapeHtml(label)} warnings"><h4>${escapeHtml(label)} warnings</h4><ul>${warnings.map((warning) => `<li>${escapeHtml(retryWarningText(warning))}</li>`).join("")}</ul></section>`;
+}
+
+function retryQualityObservation(label, observation) {
+  const detail = observation && typeof observation === "object"
+    ? observation.message || observation.detail || observation.status || "Observed"
+    : observation;
+  return `<li><span>${escapeHtml(label)}</span><strong>${escapeHtml(detail)}</strong></li>`;
+}
+
+function renderRetryQuality(quality) {
+  const stateName = quality?.state || "unavailable";
+  const message = quality?.message || "Capture-quality details are unavailable for this retry.";
+  const observations = quality?.observations && typeof quality.observations === "object"
+    ? Object.entries(quality.observations)
+    : [];
+  return `
+    <section class="retry-quality" data-state="${escapeHtml(stateName)}" aria-labelledby="retry-quality-heading">
+      <div><h3 id="retry-quality-heading">Capture quality</h3><p>${escapeHtml(message)}</p></div>
+      ${observations.length ? `<ul>${observations.map(([label, observation]) => retryQualityObservation(label, observation)).join("")}</ul>` : ""}
+    </section>
+  `;
+}
+
+function renderRetryComparisonTurns(turns, label) {
+  const rows = Array.isArray(turns) ? turns : [];
+  return `
+    <section class="retry-transcript-column" aria-labelledby="retry-${label}-heading">
+      <header><p class="eyebrow">${escapeHtml(label === "current" ? "Retained transcript" : "New local result")}</p><h3 id="retry-${label}-heading">${label === "current" ? "Current" : "Retry candidate"}</h3></header>
+      ${renderRetryWarnings(label === "current" ? state.transcriptRetry?.current?.warnings : state.transcriptRetry?.candidate?.warnings, label === "current" ? "Current transcript" : "Retry candidate")}
+      <div class="retry-transcript-turns" tabindex="0" aria-label="${escapeHtml(label === "current" ? "Current transcript turns" : "Retry candidate transcript turns")}">
+        ${rows.length ? rows.map((turn) => {
+    const speaker = transcriptSpeakerLabel(turn);
+    return `<div class="transcript-line ${turn.withheld ? "withheld" : ""}">
+              <div class="transcript-line-meta"><time>${escapeHtml(timeLabel(turn.start))}</time>${speaker ? `<span>${escapeHtml(speaker)}</span>` : ""}</div>
+              <p>${turn.withheld ? "This turn was withheld by the voice check." : escapeHtml(turn.text)}</p>
+            </div>`;
+  }).join("") : `<p class="transcript-empty">No transcript turns are available for this comparison.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderTranscriptRetrySheet() {
+  const retry = state.transcriptRetry;
+  if (!retry?.operationId) return "";
+  const deciding = state.busyAction === "decide-transcript-retry";
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="start-sheet transcript-retry-sheet" role="dialog" aria-modal="true" aria-labelledby="transcript-retry-sheet-title">
+        <div class="sheet-head">
+          <div><p class="eyebrow">Transcript retry</p><h2 id="transcript-retry-sheet-title">Compare before changing the source.</h2><p>Nothing changes until you choose. The retained transcript stays as it is unless you explicitly use this retry.</p></div>
+          <button class="icon-button" type="button" data-action="decide-retry-later" aria-label="Decide later">×</button>
+        </div>
+        ${renderRetryQuality(retry.quality)}
+        <div class="retry-transcript-comparison">
+          ${renderRetryComparisonTurns(retry.current?.turns, "current")}
+          ${renderRetryComparisonTurns(retry.candidate?.turns, "candidate")}
+        </div>
+        <section class="retry-use-warning" aria-labelledby="retry-use-warning-heading"><h3 id="retry-use-warning-heading">Using this retry clears the current generated note.</h3><p>You will need to regenerate the note from the selected retry. Yawn will not regenerate it automatically.</p></section>
+        <div class="sheet-actions retry-sheet-actions">
+          <button class="button button-quiet" type="button" data-action="decide-retry-later" ${deciding ? "disabled" : ""}>Decide later</button>
+          <button class="button button-secondary" type="button" data-action="keep-current-transcript" ${deciding ? "disabled" : ""}>${deciding ? "Saving decision…" : "Keep current"}</button>
+          <button class="button button-danger" type="button" data-action="use-retry-transcript" ${deciding ? "disabled" : ""}>${deciding ? "Saving decision…" : "Use retry"}</button>
+        </div>
       </section>
     </div>
   `;
@@ -1252,6 +1374,7 @@ async function loadSelectedMeeting(row) {
   const transcript = note.transcriptHandle
     ? await invoke("library_open_transcript", { handle: note.transcriptHandle })
     : null;
+  const pendingRetry = await loadPendingTranscriptRetry(note, transcript);
   const operatorNote = note.operatorNote || { text: "", unreadable: false };
   state.meetingManagementOpen = false;
   state.transcriptQuery = "";
@@ -1259,12 +1382,93 @@ async function loadSelectedMeeting(row) {
     row,
     note,
     transcript,
+    transcriptRetry: pendingRetry,
     claimEvidence: {},
     operatorNoteDraft: operatorNote.text || "",
     operatorNoteSaveQueue: Promise.resolve(),
     operatorNoteSaveState: operatorNote.unreadable ? "unreadable" : operatorNote.text ? "saved" : "local",
   };
   state.activeView = "meeting";
+}
+
+async function loadPendingTranscriptRetry(note, transcript) {
+  const retry = transcriptRetryContext(note, transcript);
+  if (!retry) return null;
+  try {
+    const pending = await invoke("transcript_retry_pending", {
+      meetingId: retry.meetingId,
+      sourceTranscriptSha256: retry.sourceTranscriptSha256,
+    });
+    return transcriptRetryPresentation({
+      meetingId: retry.meetingId,
+      transcriptMeetingId: transcript?.meetingId,
+      sourceTranscriptSha256: retry.sourceTranscriptSha256,
+      audioRetentionState: note?.audioRetention?.state,
+      capture: state.snapshot?.capture,
+      recovery: meetingRecoveryPresentation(note, transcript, state.generatingMeetingId),
+      pending,
+    })?.pending || null;
+  } catch {
+    // A pending candidate is a convenience. A failed check must not make the
+    // retained meeting unreadable or claim that a retry exists.
+    return null;
+  }
+}
+
+async function openTranscriptRetry() {
+  const selection = state.selected;
+  const retry = transcriptRetryContext(selection?.note, selection?.transcript, selection?.transcriptRetry);
+  if (!selection || !retry) return;
+  if (retry.pending) {
+    state.transcriptRetry = { ...retry.pending, phase: "ready" };
+    state.modal = "transcript-retry";
+    render();
+    queueMicrotask(() => root.querySelector("[data-action='decide-retry-later']")?.focus());
+    return;
+  }
+  state.transcriptRetry = { ...retry, phase: "starting" };
+  render();
+  try {
+    const comparison = await invoke("transcript_retry_start", {
+      meetingId: retry.meetingId,
+      sourceTranscriptSha256: retry.sourceTranscriptSha256,
+    });
+    if (state.selected !== selection) return;
+    selection.transcriptRetry = comparison;
+    state.transcriptRetry = { ...comparison, phase: "ready" };
+    state.modal = "transcript-retry";
+    render();
+    queueMicrotask(() => root.querySelector("[data-action='decide-retry-later']")?.focus());
+  } catch (error) {
+    if (state.selected === selection) state.transcriptRetry = null;
+    reportError(error);
+  }
+}
+
+async function decideTranscriptRetry(decision) {
+  const selection = state.selected;
+  const retry = state.transcriptRetry;
+  if (!selection?.row?.meetingId || !retry?.operationId || !["keep-current", "use-retry"].includes(decision)) return;
+  await flushSelectedNoteSave();
+  await runBusy("decide-transcript-retry", async () => {
+    const response = await invoke("transcript_retry_decide", {
+      meetingId: retry.meetingId,
+      operationId: retry.operationId,
+      sourceTranscriptSha256: retry.sourceTranscriptSha256,
+      candidateTranscriptSha256: retry.candidateTranscriptSha256,
+      decision,
+    });
+    if (!response?.outcome) {
+      throw new Error(response.message || "Yawn could not save that transcript decision.");
+    }
+    if (state.selected !== selection) return;
+    state.modal = "";
+    state.transcriptRetry = null;
+    state.notice = response.message || (decision === "use-retry"
+      ? "The retry is now the selected transcript. Regenerate the meeting note when you are ready."
+      : "The retained transcript remains selected.");
+    await reopenSelectedMeeting(selection.row.meetingId);
+  });
 }
 
 async function reopenSelectedMeeting(meetingId) {
@@ -1669,6 +1873,13 @@ function handleClick(event) {
   else if (action === "open-meeting") void openMeeting(control.dataset.handle);
   else if (action === "open-speaker-correction") openSpeakerCorrection(Number(control.dataset.sourceTurnIndex));
   else if (action === "open-vocabulary") void openVocabulary();
+  else if (action === "start-transcript-retry") void openTranscriptRetry();
+  else if (action === "decide-retry-later") {
+    closeModal();
+    render();
+  }
+  else if (action === "keep-current-transcript") void decideTranscriptRetry("keep-current");
+  else if (action === "use-retry-transcript") void decideTranscriptRetry("use-retry");
   else if (action === "edit-vocabulary") editVocabulary(control.dataset.vocabularyId);
   else if (action === "cancel-vocabulary-edit") {
     resetVocabularyDraft();
