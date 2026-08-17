@@ -9,6 +9,7 @@ import {
   captureIsInProgress,
   capturePresentation,
   humanize,
+  meetingRecoveryPresentation,
   meetingNotePresentation,
   mergePermissions,
   noteGenerationPresentation,
@@ -193,4 +194,87 @@ test("the generate control follows the backend's eligibility signal alone", () =
   assert.equal(noteGenerationPresentation({ meetingId: "m-1" }, ""), null);
   assert.equal(noteGenerationPresentation({ regenerationSourceSha256: "x" }, ""), null);
   assert.equal(noteGenerationPresentation(null, ""), null);
+});
+
+test("summary failure keeps the transcript and offers regeneration when its source is pinned", () => {
+  const recovery = meetingRecoveryPresentation({
+    state: "summary-failed",
+    meetingId: "m-1",
+    regenerationSourceSha256: "a".repeat(64),
+    claims: [],
+  }, { state: "transcript", turns: [{ text: "kept" }] });
+  assert.equal(recovery.state, "summary-failed");
+  assert.equal(recovery.action.action, "generate-note");
+  assert.equal(recovery.action.label, "Regenerate note");
+  assert.match(recovery.detail, /transcript/);
+  assert.match(recovery.detail, /remain unchanged/);
+});
+
+test("summary failure without a source explains that retry is unavailable", () => {
+  const recovery = meetingRecoveryPresentation({
+    state: "summary-failed",
+    meetingId: "m-1",
+    claims: [],
+  });
+  assert.equal(recovery.state, "summary-failed-no-source");
+  assert.equal(recovery.action, null);
+  assert.match(recovery.detail, /cannot retry/);
+  assert.match(recovery.detail, /stays unchanged/);
+});
+
+test("active generation says what remains without offering a second retry", () => {
+  const recovery = meetingRecoveryPresentation({
+    state: "summary-failed",
+    meetingId: "m-1",
+    regenerationSourceSha256: "a".repeat(64),
+    claims: [{ claimType: "summary", claim: "The current note." }],
+  }, { state: "transcript" }, "m-1");
+  assert.equal(recovery.state, "generating");
+  assert.equal(recovery.action, null);
+  assert.match(recovery.detail, /current note stays in place/);
+});
+
+test("stale transcript routes back to meetings instead of inventing a transcript retry", () => {
+  const recovery = meetingRecoveryPresentation(
+    { state: "transcript-only", meetingId: "m-1" },
+    { state: "stale", turns: [], message: "That transcript is no longer available." },
+  );
+  assert.equal(recovery.state, "transcript-unavailable");
+  assert.deepEqual(recovery.action, { action: "meetings", label: "Back to meetings" });
+  assert.match(recovery.detail, /stay unchanged/);
+});
+
+test("released audio says retranscription is unavailable while preserving the note and transcript", () => {
+  const recovery = meetingRecoveryPresentation({
+    state: "transcript-only",
+    meetingId: "m-1",
+    audioRetention: { state: "released" },
+  }, { state: "transcript", turns: [{ text: "kept" }] });
+  assert.equal(recovery.state, "audio-released");
+  assert.equal(recovery.action, null);
+  assert.match(recovery.detail, /cannot be retranscribed/);
+  assert.match(recovery.detail, /remain available/);
+});
+
+test("released audio remains visible even when a usable note is present", () => {
+  const recovery = meetingRecoveryPresentation({
+    state: "ready",
+    meetingId: "m-1",
+    claims: [{ claimType: "summary", claim: "The current note." }],
+    audioRetention: { state: "released" },
+  }, { state: "transcript", turns: [{ text: "kept" }] });
+  assert.equal(recovery.state, "audio-released");
+  assert.equal(recovery.action, null);
+});
+
+test("speaker correction pending keeps the current note and has no premature generation action", () => {
+  const recovery = meetingRecoveryPresentation({
+    state: "ready",
+    meetingId: "m-1",
+    regenerationSourceSha256: "a".repeat(64),
+    claims: [{ claimType: "summary", claim: "The current note." }],
+  }, { state: "transcript", turns: [{ speakerCorrected: true }] });
+  assert.equal(recovery.state, "speaker-correction-pending");
+  assert.equal(recovery.action, null);
+  assert.match(recovery.detail, /current note stays unchanged/);
 });

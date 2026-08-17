@@ -296,3 +296,99 @@ export function noteGenerationPresentation(note, generatingMeetingId) {
       : "Runs the downloaded note model on this Mac. It usually takes several minutes, longer for long meetings. Nothing leaves your computer.",
   };
 }
+
+// Keep recovery copy at the same evidence boundary as the library response.
+// A source pin is the only browser-visible proof that note regeneration can
+// run. Transcript and audio states are read-only facts: do not invent a retry
+// control for either one.
+export function meetingRecoveryPresentation(note, transcript, generatingMeetingId = "") {
+  const noteState = note?.state || "";
+  const meetingId = note?.meetingId || "";
+  const hasSource = typeof note?.regenerationSourceSha256 === "string"
+    && note.regenerationSourceSha256.trim().length > 0
+    && Boolean(meetingId);
+  const transcriptState = transcript?.state || "";
+  const transcriptUnavailable = ["stale", "unavailable"].includes(transcriptState);
+  const correctionPending = Array.isArray(transcript?.turns)
+    && transcript.turns.some((turn) => turn?.speakerCorrected);
+  const generating = Boolean(meetingId) && generatingMeetingId === meetingId;
+  const hasUsableNote = Array.isArray(note?.claims) && note.claims.length > 0;
+
+  if (generating) {
+    return {
+      state: "generating",
+      tone: "working",
+      title: "Preparing your meeting note.",
+      detail: hasUsableNote
+        ? "Yawn is trying again. Your current note stays in place until a replacement passes every check."
+        : "Yawn is trying again. Your transcript stays available while the note is prepared.",
+      action: null,
+    };
+  }
+
+  if (correctionPending) {
+    return {
+      state: "speaker-correction-pending",
+      tone: "attention",
+      title: "Speaker corrections are saved.",
+      detail: hasUsableNote
+        ? "The corrected transcript remains visible. Your current note stays unchanged until note generation uses those corrections."
+        : "The corrected transcript remains visible. Note generation is not available for this correction yet.",
+      action: null,
+    };
+  }
+
+  if (transcriptUnavailable) {
+    return {
+      state: "transcript-unavailable",
+      tone: "attention",
+      title: "The transcript is unavailable.",
+      detail: "Yawn could not load this meeting’s transcript. The note and any transcript text already shown stay unchanged. Reopen Meetings to try this meeting again.",
+      action: { action: "meetings", label: "Back to meetings" },
+    };
+  }
+
+  if (noteState === "summary-failed") {
+    if (hasSource) {
+      return {
+        state: "summary-failed",
+        tone: "attention",
+        title: "Your meeting note needs another try.",
+        detail: "Yawn could not create a note. Your transcript and current note remain unchanged.",
+        action: { action: "generate-note", label: "Regenerate note" },
+      };
+    }
+    return {
+      state: "summary-failed-no-source",
+      tone: "attention",
+      title: "Your meeting note could not be created.",
+      detail: "No usable transcript source remains, so Yawn cannot retry. Any note or transcript already shown stays unchanged.",
+      action: null,
+    };
+  }
+
+  // Audio retention matters for retranscription, not for reading or
+  // regenerating a note from its transcript. Keep this warning even when a
+  // finished note is present; the renderer leaves its note action available.
+  if (note?.audioRetention?.state === "released") {
+    return {
+      state: "audio-released",
+      tone: "attention",
+      title: "The recording is no longer available.",
+      detail: "The audio was already deleted. The transcript and note remain available, but this meeting cannot be retranscribed.",
+      action: null,
+    };
+  }
+
+  if (noteState === "stale" || noteState === "unavailable") {
+    return {
+      state: "meeting-unavailable",
+      tone: "attention",
+      title: "This meeting is unavailable.",
+      detail: "Yawn could not read this meeting. Nothing already saved here was replaced. Reopen Meetings to try again.",
+      action: { action: "meetings", label: "Back to meetings" },
+    };
+  }
+
+  return null;
+}

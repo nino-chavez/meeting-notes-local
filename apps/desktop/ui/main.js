@@ -5,6 +5,7 @@ import {
   captureIsInProgress,
   capturePresentation,
   humanize,
+  meetingRecoveryPresentation,
   meetingNotePresentation,
   mergePermissions,
   noteGenerationPresentation,
@@ -569,7 +570,8 @@ function renderMeetingNote(note, claimEvidence) {
   `;
 }
 
-function renderTranscriptDisclosure(transcript) {
+function renderTranscriptDisclosure(transcript, recovery = null) {
+  if (recovery?.state === "transcript-unavailable" && !transcript?.turns?.length) return "";
   if (!transcript?.turns?.length && !transcript?.message) return "";
   return `
     <details class="transcript-disclosure">
@@ -582,6 +584,18 @@ function renderTranscriptDisclosure(transcript) {
         }) : `<section class="note-section transcript-unavailable"><p class="message-card">${escapeHtml(transcript.message)}</p></section>`}
       </div>
     </details>
+  `;
+}
+
+function renderMeetingRecovery(recovery) {
+  if (!recovery) return "";
+  const headingId = `meeting-recovery-${recovery.state}`;
+  return `
+    <section class="message-card recovery-card ${recovery.tone === "working" ? "" : "attention"}" aria-labelledby="${headingId}">
+      <h2 id="${headingId}">${escapeHtml(recovery.title)}</h2>
+      <p>${escapeHtml(recovery.detail)}</p>
+      ${recovery.action ? `<button class="button button-primary button-small" type="button" data-action="${escapeHtml(recovery.action.action)}">${escapeHtml(recovery.action.label)}</button>` : ""}
+    </section>
   `;
 }
 
@@ -607,6 +621,7 @@ function renderMeeting() {
   const canDeleteMeeting = Boolean(note?.meetingDeletionHandle);
   const canManage = canDeleteRecording || canDeleteTranscript || canDeleteMeeting;
   const retentionMessage = note?.audioRetention?.message || "Audio-retention details are unavailable for this meeting.";
+  const recovery = meetingRecoveryPresentation(note, transcript, state.generatingMeetingId);
   return `
     <article class="meeting-page meeting-workspace-page" aria-labelledby="meeting-title">
       <button class="text-button" type="button" data-action="meetings">Back to meetings</button>
@@ -630,12 +645,13 @@ function renderMeeting() {
         <div class="meeting-meta"><span>${escapeHtml(dateLabel(row.createdAtEpochSeconds))}</span><span>${escapeHtml(note?.state ? humanize(note.state) : "Loading note")}</span></div>
         <p class="meeting-storage-note">${escapeHtml(retentionMessage)}</p>
       </header>
-      ${note?.message && !claims.length ? `<p class="message-card ${note.state === "summary-failed" ? "attention" : ""}">${escapeHtml(note.message)}</p>` : ""}
-      ${renderGenerateNote(note)}
+      ${renderMeetingRecovery(recovery)}
+      ${!recovery && note?.message && !claims.length ? `<p class="message-card ${note.state === "summary-failed" ? "attention" : ""}">${escapeHtml(note.message)}</p>` : ""}
+      ${renderGenerateNote(note, recovery)}
       <div class="meeting-workspace">
         <main class="meeting-source-pane">
           ${renderMeetingNote(note, claimEvidence)}
-          ${renderTranscriptDisclosure(transcript)}
+          ${renderTranscriptDisclosure(transcript, recovery)}
         </main>
         <aside class="meeting-notes-pane">
           <section class="note-section your-notes-section" aria-labelledby="operator-note-heading">
@@ -651,7 +667,8 @@ function renderMeeting() {
   `;
 }
 
-function renderGenerateNote(note) {
+function renderGenerateNote(note, recovery = meetingRecoveryPresentation(note, state.selected?.transcript, state.generatingMeetingId)) {
+  if (recovery && recovery.state !== "audio-released") return "";
   const control = noteGenerationPresentation(note, state.generatingMeetingId);
   if (!control) return "";
   const correctionsPendingProjection = state.selected?.transcript?.turns?.some((turn) => turn.speakerCorrected);

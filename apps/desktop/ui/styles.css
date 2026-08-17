@@ -678,6 +678,20 @@ h3 {
   white-space: normal;
 }
 
+.recovery-card h2 {
+  margin: 0 0 6px;
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.recovery-card p {
+  margin: 0;
+}
+
+.recovery-card .button {
+  margin-top: 12px;
+}
+
 .message-card.attention {
   border-color: rgb(156 103 21 / 25%);
   background: var(--attention-soft);
