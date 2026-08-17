@@ -1244,6 +1244,10 @@ pub fn internal_alpha_operations() -> HashSet<Operation> {
         CaptureFinalize,
         CaptureInspect,
         TranscriptCreate,
+        // TranscriptRetry joined with the source-bound immutable candidate
+        // flow. Keep this in exact lockstep with the worker's advertised
+        // internal-alpha operations or the packaged app refuses startup.
+        TranscriptRetry,
         SittingDerive,
         TranscriptRestore,
         CorpusEmbed,
