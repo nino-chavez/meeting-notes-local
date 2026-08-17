@@ -306,13 +306,18 @@ fn install_model(
     validate_install_root(root, &repository)?;
     validate_external_directory(bundle_resources, "bundle resources")?;
     validate_external_directory(source_model_dir, "source model")?;
-    if source_model_dir.starts_with(&repository.canonicalize().unwrap_or(repository.clone())) {
+    let canonical_bundle_resources = bundle_resources.canonicalize()?;
+    let canonical_source_model_dir = source_model_dir.canonicalize()?;
+    let canonical_repository = repository
+        .canonicalize()
+        .unwrap_or_else(|_| repository.clone());
+    if canonical_source_model_dir.starts_with(&canonical_repository) {
         return Err(FixtureError::UnsafeInstallPath(
             "source model is inside the source repository".into(),
         ));
     }
 
-    let manifest_path = bundle_resources.join("app-runtime.json");
+    let manifest_path = canonical_bundle_resources.join("app-runtime.json");
     let manifest = RuntimeManifest::load_and_verify(&manifest_path)?;
     let catalog_resource = manifest
         .model_catalog
@@ -326,8 +331,11 @@ fn install_model(
         .model(model_id)
         .map_err(|_| FixtureError::UnknownModel)?
         .clone();
-    if source_model_dir.file_name().and_then(|name| name.to_str()) != Some(entry.revision.as_str())
-        || source_model_dir
+    if canonical_source_model_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        != Some(entry.revision.as_str())
+        || canonical_source_model_dir
             .parent()
             .and_then(Path::file_name)
             .and_then(|name| name.to_str())
@@ -363,7 +371,8 @@ fn install_model(
     {
         return Err(FixtureError::ExistingModel);
     }
-    verify_model_directory(source_model_dir, &entry).map_err(|_| FixtureError::SourceChanged)?;
+    verify_model_directory(&canonical_source_model_dir, &entry)
+        .map_err(|_| FixtureError::SourceChanged)?;
     create_private_dir(&target)?;
     for file in &entry.files {
         if !matches!(
@@ -375,7 +384,7 @@ fn install_model(
             ));
         }
         copy_private_model_file(
-            &source_model_dir.join(&file.name),
+            &canonical_source_model_dir.join(&file.name),
             &target.join(&file.name),
             file.bytes,
         )?;
@@ -386,7 +395,9 @@ fn install_model(
     )?;
     sync_directory(&target)?;
     verify_model_directory(&target, &entry)?;
-    verify_model_directory(source_model_dir, &entry).map_err(|_| FixtureError::SourceChanged)?;
+    verify_model_directory(&canonical_source_model_dir, &entry)
+        .map_err(|_| FixtureError::SourceChanged)?;
+    activate_model(&storage, &entry)?;
 
     let model_marker = json!({
         "schema": "synthetic-model-fixture/1",
@@ -400,7 +411,6 @@ fn install_model(
         &storage.path().join("MODEL_FIXTURE.json"),
         &serde_json::to_vec_pretty(&model_marker)?,
     )?;
-    activate_model(&storage, &entry)?;
     Ok(())
 }
 
@@ -968,6 +978,24 @@ mod tests {
         assert!(matches!(
             install_model(&root, &bundle, &source, &entry.id, repository),
             Err(FixtureError::SourceChanged)
+        ));
+
+        let temp = TempDir::new().unwrap();
+        let (root, repository, bundle, _source, entry, config, weights) = install_inputs(&temp);
+        let repository_model = repository.join(&entry.id).join(&entry.revision);
+        create_private_dir(&repository_model).unwrap();
+        write_bundle_file(&repository_model.join("config.json"), &config);
+        write_bundle_file(&repository_model.join("weights.safetensors"), &weights);
+        write_bundle_file(
+            &repository_model.join("model-install.json"),
+            &install_receipt_bytes(&entry),
+        );
+        let parent_link = temp.path().join("source-parent-link");
+        symlink(&repository, &parent_link).unwrap();
+        let linked_source = parent_link.join(&entry.id).join(&entry.revision);
+        assert!(matches!(
+            install_model(&root, &bundle, &linked_source, &entry.id, repository),
+            Err(FixtureError::UnsafeInstallPath(_))
         ));
     }
 }
