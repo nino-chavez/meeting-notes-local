@@ -2,6 +2,9 @@
 
 Status: reset on 2026-08-10.
 
+Future sequencing lives in the [product roadmap](roadmap.md). The roadmap may
+propose work, but this brief remains the current product contract until amended.
+
 ## Who this is for
 
 One person needs to stay in a conversation and still keep a useful private

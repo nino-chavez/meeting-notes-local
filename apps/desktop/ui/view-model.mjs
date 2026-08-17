@@ -251,6 +251,20 @@ export function transcriptPlainText(turns) {
   return lines.join("\n");
 }
 
+// The retained turn owns the attribution. Missing attribution stays explicit,
+// and a withheld turn carries no speaker claim at all.
+export function transcriptSpeakerLabel(turn) {
+  if (turn?.withheld) return null;
+  const speaker = typeof turn?.speaker === "string" ? turn.speaker.trim() : "";
+  return speaker || "Unattributed";
+}
+
+export function transcriptTurnsForSourceSpeaker(turns, sourceSpeaker) {
+  if (!Array.isArray(turns)) return [];
+  const source = typeof sourceSpeaker === "string" ? sourceSpeaker : null;
+  return turns.filter((turn) => !turn?.withheld && (turn?.sourceSpeaker || null) === source);
+}
+
 // Search is intentionally local to the retained text. A withheld turn remains
 // visible in the full transcript, but it has no text that can truthfully match.
 export function transcriptTurnsMatching(turns, query) {

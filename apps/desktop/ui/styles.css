@@ -732,18 +732,65 @@ h3 {
 
 .transcript-line {
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
+  grid-template-columns: 92px minmax(0, 1fr);
   gap: 12px;
   padding: 12px 0;
   border-top: 1px solid rgb(228 228 222 / 78%);
 }
 
-.transcript-line time {
+.transcript-line-meta {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  min-width: 0;
   padding-top: 2px;
+}
+
+.transcript-line time {
   color: var(--ink-faint);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+.transcript-line-meta span {
+  overflow: hidden;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.speaker-label-button {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
+.speaker-label-button span {
+  max-width: 100%;
+  border-bottom: 1px solid transparent;
+}
+
+.speaker-label-button:hover span {
+  border-bottom-color: var(--ink-faint);
+}
+
+.speaker-label-button small {
+  margin-top: 3px;
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  text-transform: uppercase;
 }
 
 .transcript-line p {
@@ -1049,6 +1096,16 @@ h3 {
 
 .transcript-disclosure-content {
   padding: 14px;
+}
+
+.transcript-correction-note {
+  margin: 0;
+  padding: 10px 18px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-faint);
+  background: var(--paper-soft);
+  font-size: 11px;
+  line-height: 1.45;
 }
 
 .transcript-workspace {
@@ -1418,6 +1475,40 @@ h3 {
   color: var(--ink);
   background: var(--paper);
   font: inherit;
+}
+
+.speaker-correction-source {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper-soft);
+  font-size: 13px;
+}
+
+.speaker-correction-source span {
+  color: var(--ink-faint);
+}
+
+.speaker-correction-provenance {
+  padding: 12px 13px;
+  margin: 16px 0 24px;
+  border-left: 2px solid var(--accent);
+  color: var(--ink-soft);
+  background: var(--accent-soft);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.speaker-correction-provenance p {
+  margin: 3px 0 0;
+}
+
+.speaker-correction-sheet .sheet-actions {
+  flex-wrap: wrap;
 }
 
 .attestation-list {

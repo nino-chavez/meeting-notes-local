@@ -16,6 +16,8 @@ import {
   retentionLabel,
   shouldPollSnapshot,
   transcriptPlainText,
+  transcriptSpeakerLabel,
+  transcriptTurnsForSourceSpeaker,
   transcriptTurnsMatching,
   transcriptionWorkerHeartbeatAgeSeconds,
 } from "./view-model.mjs";
@@ -125,6 +127,28 @@ test("a copied transcript keeps known gaps visible", () => {
   ]);
   assert.equal(transcriptPlainText([]), "");
   assert.equal(transcriptPlainText(null), "");
+});
+
+test("the rendered transcript names known and missing attribution without guessing", () => {
+  assert.equal(transcriptSpeakerLabel({ speaker: "Me" }), "Me");
+  assert.equal(transcriptSpeakerLabel({ speaker: "  Them  " }), "Them");
+  assert.equal(transcriptSpeakerLabel({ speaker: "Facilitator" }), "Facilitator");
+  assert.equal(transcriptSpeakerLabel({}), "Unattributed");
+  assert.equal(transcriptSpeakerLabel({ speaker: "   " }), "Unattributed");
+  assert.equal(transcriptSpeakerLabel({ speaker: "Me", withheld: true }), null);
+});
+
+test("speaker correction targets only the matching retained source group", () => {
+  const turns = [
+    { sourceSpeaker: "Me", speaker: "Me" },
+    { sourceSpeaker: "Them", speaker: "Alex", speakerCorrected: true },
+    { sourceSpeaker: "Them", speaker: "Alex", speakerCorrected: true },
+    { sourceSpeaker: null, speaker: null },
+    { sourceSpeaker: "Them", speaker: null, withheld: true },
+  ];
+  assert.equal(transcriptTurnsForSourceSpeaker(turns, "Them").length, 2);
+  assert.equal(transcriptTurnsForSourceSpeaker(turns, null).length, 1);
+  assert.equal(transcriptTurnsForSourceSpeaker(turns, "Me").length, 1);
 });
 
 test("transcript search only matches retained text", () => {

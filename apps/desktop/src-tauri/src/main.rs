@@ -11,6 +11,7 @@ mod library_reader;
 #[allow(dead_code)]
 mod product_facade;
 mod manual_delete_facade;
+mod speaker_correction;
 // First run's permission surface (§ H). Runs the manifest-verified permission
 // probe and parses its output as untrusted input; holds no storage authority and
 // reads no operator content.
@@ -441,7 +442,11 @@ impl From<&TranscriptModel> for ModelSetupOption {
 struct TranscriptTurn {
     #[serde(rename = "sourceTurnIndex")]
     source_turn_index: u32,
+    #[serde(rename = "sourceSpeaker")]
+    source_speaker: Option<String>,
     speaker: Option<String>,
+    #[serde(rename = "speakerCorrected")]
+    speaker_corrected: bool,
     start: f64,
     text: String,
     // Withheld rows are positional only: the gate's decision is visible, the
@@ -5110,6 +5115,121 @@ fn load_bound_preview_transcript_projection(
     Ok((turns, warnings))
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpeakerCorrectionResponse {
+    operation_id: Uuid,
+    applied_turn_count: usize,
+    message: String,
+}
+
+/// Saves one meeting-local speaker-name correction without rewriting the
+/// retained transcript. The source digest and original source label are both
+/// rechecked under the meeting lease, so a stale screen cannot rename a newer
+/// projection or broaden a correction to a group it did not display.
+#[tauri::command(rename_all = "camelCase")]
+fn correct_speaker_name(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    source_speaker: Option<String>,
+    replacement: String,
+    state: State<'_, ApplicationState>,
+) -> Result<SpeakerCorrectionResponse, String> {
+    correct_speaker_name_for(
+        meeting_id,
+        source_transcript_sha256,
+        source_speaker,
+        replacement,
+        &state,
+    )
+}
+
+fn correct_speaker_name_for(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    source_speaker: Option<String>,
+    replacement: String,
+    state: &ApplicationState,
+) -> Result<SpeakerCorrectionResponse, String> {
+    let _command = state
+        .command_lock
+        .lock()
+        .map_err(|_| "Speaker correction is unavailable. Reopen the meeting and try again.")?;
+    if sitting_task_active(&state) {
+        return Err("Finish the setup recording before correcting a speaker name.".into());
+    }
+    {
+        let model = state
+            .model
+            .lock()
+            .map_err(|_| "Speaker correction is unavailable. Reopen the meeting and try again.")?;
+        if model.reducer.startup() != StartupState::Ready
+            || model.reducer.capture() != CaptureState::Idle
+        {
+            return Err("Finish the current recording before correcting a speaker name.".into());
+        }
+    }
+    let storage = preview_storage_clone(&state)
+        .map_err(|_| "Local meeting storage is unavailable. Reopen the app and try again.")?;
+    let coordination = state.meeting_storage_coordination()?;
+    let _lease = coordination
+        .acquire(&meeting_id.to_string())
+        .map_err(|_| "Another action is using this meeting. Reopen it and try again.")?;
+    let directory = meeting_dir(&storage, &meeting_id.to_string()).map_err(error_text)?;
+    let meeting = load_meeting(&directory).map_err(error_text)?;
+    let current = meeting
+        .artifacts
+        .current_transcript
+        .as_ref()
+        .ok_or_else(|| "This meeting no longer has a retained transcript.".to_string())?;
+    if current.sha256 != source_transcript_sha256 {
+        return Err("The transcript changed. Reopen the meeting and try again.".into());
+    }
+    let (turns, _) = load_transcript_projection(&directory, &meeting_id.to_string(), current)?;
+    let applied_turn_count = turns
+        .iter()
+        .filter(|turn| !turn.withheld && turn.source_speaker == source_speaker)
+        .count();
+    if applied_turn_count == 0 {
+        return Err("That speaker group is no longer available. Reopen the meeting and try again.".into());
+    }
+    let replacement = speaker_correction::normalize_replacement(&replacement)?;
+    let operation_id = Uuid::new_v4();
+    speaker_correction::append(
+        &directory,
+        meeting_id,
+        speaker_correction::SpeakerCorrectionOperation {
+            operation_id,
+            source_transcript_sha256: source_transcript_sha256.clone(),
+            source_speaker: source_speaker.clone(),
+            replacement: replacement.clone(),
+            applied_at_epoch_seconds: now_epoch_seconds(),
+        },
+    )?;
+    let stored = speaker_correction::current_labels(
+        &directory,
+        meeting_id,
+        &source_transcript_sha256,
+    )
+    .map_err(|_| "The saved speaker correction could not be verified.".to_string())?;
+    let restored_source_label = replacement == source_speaker.as_deref().unwrap_or("Unattributed");
+    if (restored_source_label && stored.contains_key(&source_speaker))
+        || (!restored_source_label && stored.get(&source_speaker) != Some(&replacement))
+    {
+        return Err("The saved speaker correction could not be verified.".into());
+    }
+    with_preview_library_invalidated(&state, || ())
+        .map_err(|_| "The meeting was corrected, but the library could not refresh.".to_string())?;
+    Ok(SpeakerCorrectionResponse {
+        operation_id,
+        applied_turn_count,
+        message: format!(
+            "Speaker name updated for {applied_turn_count} transcript {}. The retained transcript was not changed.",
+            if applied_turn_count == 1 { "turn" } else { "turns" }
+        ),
+    })
+}
+
 fn main() {
     let state = ApplicationState::default();
     // Managed now so registering the facade commands later is one move; the
@@ -5169,6 +5289,7 @@ fn main() {
             library_open_note,
             library_open_transcript,
             library_open_transcript_file,
+            correct_speaker_name,
             library_save_operator_note,
             preview_delete_meeting_audio,
             preview_delete_meeting_transcript,
@@ -6931,24 +7052,43 @@ fn project_current_transcript(
         })
         .as_deref()
         == Some("transcript-view/1");
-    if !is_view {
-        return parse_transcript_projection_with(bytes, &BTreeSet::new());
-    }
     let meeting_uuid = Uuid::parse_str(meeting_id).map_err(error_text)?;
-    let resolved = resolve_stored_transcript_primed(
-        meeting_dir,
-        meeting_uuid,
-        &reference.sha256,
-        bytes.to_vec(),
-    )
-    .map_err(error_text)?;
-    let restored: BTreeSet<u32> = resolved
-        .inspection
-        .restored_source_turn_indices
-        .iter()
-        .copied()
-        .collect();
-    parse_transcript_projection_with(&resolved.base_bytes, &restored)
+    let (mut turns, mut warnings) = if !is_view {
+        parse_transcript_projection_with(bytes, &BTreeSet::new())?
+    } else {
+        let resolved = resolve_stored_transcript_primed(
+            meeting_dir,
+            meeting_uuid,
+            &reference.sha256,
+            bytes.to_vec(),
+        )
+        .map_err(error_text)?;
+        let restored: BTreeSet<u32> = resolved
+            .inspection
+            .restored_source_turn_indices
+            .iter()
+            .copied()
+            .collect();
+        parse_transcript_projection_with(&resolved.base_bytes, &restored)?
+    };
+    match speaker_correction::current_labels(meeting_dir, meeting_uuid, &reference.sha256) {
+        Ok(labels) => {
+            for turn in &mut turns {
+                if turn.withheld {
+                    continue;
+                }
+                if let Some(replacement) = labels.get(&turn.source_speaker) {
+                    turn.speaker = Some(replacement.clone());
+                    turn.speaker_corrected = true;
+                }
+            }
+        }
+        Err(()) => warnings.push(
+            "Saved speaker corrections could not be read. Source speaker labels are shown."
+                .into(),
+        ),
+    }
+    Ok((turns, warnings))
 }
 
 fn parse_transcript_projection_with(
@@ -6994,16 +7134,21 @@ fn parse_transcript_projection_with(
             gated += 1;
             turns.push(TranscriptTurn {
                 source_turn_index: source_turn_index as u32,
+                source_speaker: None,
                 speaker: None,
+                speaker_corrected: false,
                 start: turn.start,
                 text: String::new(),
                 withheld: true,
             });
             continue;
         }
+        let source_speaker = if unattributed { None } else { turn.speaker };
         turns.push(TranscriptTurn {
             source_turn_index: source_turn_index as u32,
-            speaker: if unattributed { None } else { turn.speaker },
+            speaker: source_speaker.clone(),
+            source_speaker,
+            speaker_corrected: false,
             start: turn.start,
             text: turn.text,
             withheld: false,
@@ -8675,6 +8820,41 @@ mod tests {
     }
 
     #[test]
+    fn completed_meeting_enters_the_library_after_its_active_lease_ends() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = Uuid::new_v4().to_string();
+        write_transcript_fixture(
+            &storage,
+            &meeting_id,
+            10,
+            AudioState::Retained,
+            "completed meeting words",
+        );
+        let coordination = MeetingStorageCoordination::default();
+        let active = coordination.acquire(&meeting_id).unwrap();
+
+        with_meeting_storage_sequence(&coordination, |active_meeting_ids| {
+            let mut reader =
+                library_reader::LibraryReader::rebuild(storage.clone(), active_meeting_ids)
+                    .expect("the active meeting is excluded without breaking the library");
+            assert!(reader.snapshot(active_meeting_ids).rows.is_empty());
+        })
+        .unwrap();
+
+        drop(active);
+
+        with_meeting_storage_sequence(&coordination, |active_meeting_ids| {
+            let mut reader =
+                library_reader::LibraryReader::rebuild(storage.clone(), active_meeting_ids)
+                    .expect("the completed meeting is readable after capture releases it");
+            let snapshot = reader.snapshot(active_meeting_ids);
+            assert_eq!(snapshot.rows.len(), 1);
+            assert_eq!(snapshot.rows[0].meeting_id, meeting_id);
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn app_data_writer_lock_is_exclusive_and_released_with_its_file() {
         let (_temporary, storage) = test_storage();
         let held = acquire_app_data_writer_lock(&storage).unwrap();
@@ -9232,6 +9412,134 @@ mod tests {
         assert_eq!(warnings.len(), 1);
     }
 
+    #[test]
+    fn speaker_correction_projects_over_matching_turns_without_changing_source_identity() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = Uuid::new_v4();
+        let transcript_path = write_transcript_fixture_with_turns(
+            &storage,
+            &meeting_id.to_string(),
+            10,
+            AudioState::Retained,
+            json!([
+                {"start": 0.0, "end": 1.0, "speaker": "Me", "text": "first"},
+                {"start": 1.0, "end": 2.0, "speaker": "Them", "text": "second"},
+                {"start": 2.0, "end": 3.0, "speaker": "Them", "text": "third"}
+            ]),
+        );
+        let directory = transcript_path.parent().unwrap().parent().unwrap();
+        let meeting = load_meeting(directory).unwrap();
+        let reference = meeting.artifacts.current_transcript.unwrap();
+        speaker_correction::append(
+            directory,
+            meeting_id,
+            speaker_correction::SpeakerCorrectionOperation {
+                operation_id: Uuid::new_v4(),
+                source_transcript_sha256: reference.sha256.clone(),
+                source_speaker: Some("Them".into()),
+                replacement: "Alex".into(),
+                applied_at_epoch_seconds: 11,
+            },
+        )
+        .unwrap();
+
+        let (turns, warnings) = load_transcript_projection(
+            directory,
+            &meeting_id.to_string(),
+            &reference,
+        )
+        .unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(turns[0].speaker.as_deref(), Some("Me"));
+        assert!(!turns[0].speaker_corrected);
+        assert_eq!(turns[1].speaker.as_deref(), Some("Alex"));
+        assert_eq!(turns[2].speaker.as_deref(), Some("Alex"));
+        assert_eq!(turns[1].source_speaker.as_deref(), Some("Them"));
+        assert_eq!(turns[2].source_speaker.as_deref(), Some("Them"));
+        assert!(turns[1].speaker_corrected && turns[2].speaker_corrected);
+        let source_bytes = fs::read(transcript_path).unwrap();
+        assert!(String::from_utf8(source_bytes).unwrap().contains("\"speaker\": \"Them\""));
+    }
+
+    #[test]
+    fn speaker_correction_command_saves_reopens_and_can_restore_the_source_label() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = Uuid::new_v4();
+        let transcript_path = write_transcript_fixture_with_turns(
+            &storage,
+            &meeting_id.to_string(),
+            10,
+            AudioState::Retained,
+            json!([
+                {"start": 0.0, "end": 1.0, "speaker": "Me", "text": "first"},
+                {"start": 1.0, "end": 2.0, "speaker": "Them", "text": "second"},
+                {"start": 2.0, "end": 3.0, "speaker": "Them", "text": "third"}
+            ]),
+        );
+        let directory = transcript_path.parent().unwrap().parent().unwrap();
+        let reference = load_meeting(directory)
+            .unwrap()
+            .artifacts
+            .current_transcript
+            .unwrap();
+        let state = ApplicationState::default();
+        *state.storage.lock().unwrap() = Some(StorageContext {
+            storage: storage.clone(),
+            resource_root: PathBuf::new(),
+            manifest_path: PathBuf::new(),
+            diagnostics: PathBuf::new(),
+        });
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        {
+            let mut model = state.model.lock().unwrap();
+            transition_startup(&mut model, StartupState::Checking).unwrap();
+            transition_startup(&mut model, StartupState::Ready).unwrap();
+        }
+
+        let saved = correct_speaker_name_for(
+            meeting_id,
+            reference.sha256.clone(),
+            Some("Them".into()),
+            "Alex".into(),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(saved.applied_turn_count, 2);
+        let (corrected, _) = load_transcript_projection(
+            directory,
+            &meeting_id.to_string(),
+            &reference,
+        )
+        .unwrap();
+        assert_eq!(corrected[1].speaker.as_deref(), Some("Alex"));
+        assert!(corrected[1].speaker_corrected);
+
+        correct_speaker_name_for(
+            meeting_id,
+            reference.sha256.clone(),
+            Some("Them".into()),
+            "Them".into(),
+            &state,
+        )
+        .unwrap();
+        let (restored, _) = load_transcript_projection(
+            directory,
+            &meeting_id.to_string(),
+            &reference,
+        )
+        .unwrap();
+        assert_eq!(restored[1].speaker.as_deref(), Some("Them"));
+        assert!(!restored[1].speaker_corrected);
+        assert!(correct_speaker_name_for(
+            meeting_id,
+            "b".repeat(64),
+            Some("Them".into()),
+            "Taylor".into(),
+            &state,
+        )
+        .is_err());
+    }
+
     fn gated_document_with_voiceprint(voiceprint: &str) -> Vec<u8> {
         format!(
             r#"{{
@@ -9382,7 +9690,9 @@ mod tests {
                 meeting_id: "meeting".into(),
                 turns: vec![TranscriptTurn {
                     source_turn_index: 0,
+                    source_speaker: Some("Me".into()),
                     speaker: Some("Me".into()),
+                    speaker_corrected: false,
                     start: 0.0,
                     text: "words".into(),
                     withheld: false,
@@ -9547,7 +9857,9 @@ mod tests {
                 meeting_id: "meeting-fixture".into(),
                 turns: vec![TranscriptTurn {
                     source_turn_index: 0,
+                    source_speaker: Some("Me".into()),
                     speaker: Some("Me".into()),
+                    speaker_corrected: false,
                     start: 0.0,
                     text: "visible".into(),
                     withheld: false,

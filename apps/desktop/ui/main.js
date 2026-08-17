@@ -12,6 +12,8 @@ import {
   retentionLabel,
   shouldPollSnapshot,
   transcriptPlainText,
+  transcriptSpeakerLabel,
+  transcriptTurnsForSourceSpeaker,
   transcriptTurnsMatching,
   transcriptionWorkerHeartbeatAgeSeconds,
 } from "./view-model.mjs";
@@ -42,6 +44,8 @@ const state = {
   searchTimer: null,
   selected: null,
   snapshot: null,
+  speakerCorrection: null,
+  speakerCorrectionDraft: "",
   transcriptActionStatus: {},
   transcriptQuery: "",
 };
@@ -161,6 +165,7 @@ function render() {
       <main class="stage">${content}</main>
       ${state.modal === "start" ? renderStartSheet() : ""}
       ${state.modal === "rename-meeting" ? renderRenameMeetingSheet() : ""}
+      ${state.modal === "speaker-correction" ? renderSpeakerCorrectionSheet() : ""}
       ${["delete-recording", "delete-transcript", "delete-meeting"].includes(state.modal) ? renderMeetingDeletionSheet() : ""}
       ${state.notice ? `<aside class="toast toast-notice" role="status"><button type="button" data-action="clear-notice" aria-label="Dismiss">×</button>${escapeHtml(state.notice)}</aside>` : ""}
       ${state.error ? `<aside class="toast" role="alert"><button type="button" data-action="clear-error" aria-label="Dismiss">×</button>${escapeHtml(state.error)}</aside>` : ""}
@@ -452,12 +457,24 @@ function renderTranscript(turns, title, detail = "", { copyAction = "", openFile
     ${openFileAction ? `<button class="button button-quiet button-small" type="button" data-action="${openFileAction}" ${fileBusy ? "disabled" : ""}>${fileBusy ? "Opening…" : "Open transcript file"}</button>` : ""}
     <span class="transcript-action-status" role="status" aria-live="polite">${escapeHtml(transcriptActionStatus(scope))}</span>
   </div>` : "";
-  const transcriptLines = visibleTurns.map((turn) => `
-    <div class="transcript-line ${turn.withheld ? "withheld" : ""}">
-      <time>${escapeHtml(timeLabel(turn.start))}</time>
-      <p>${turn.withheld ? "This turn was withheld by the voice check." : escapeHtml(turn.text)}</p>
-    </div>
-  `).join("");
+  const transcriptLines = visibleTurns.map((turn) => {
+    const speakerLabel = transcriptSpeakerLabel(turn);
+    const correctionAvailable = workspace && !turn.withheld && Boolean(state.selected?.transcript?.currentTranscriptSha256);
+    const correctionLabel = turn.speakerCorrected
+      ? `Change speaker name. Currently ${speakerLabel}, corrected from ${turn.sourceSpeaker || "Unattributed"}.`
+      : `Correct speaker name. Currently ${speakerLabel}.`;
+    return `
+      <div class="transcript-line ${turn.withheld ? "withheld" : ""}">
+        <div class="transcript-line-meta">
+          <time>${escapeHtml(timeLabel(turn.start))}</time>
+          ${speakerLabel ? correctionAvailable
+            ? `<button class="speaker-label-button" type="button" data-action="open-speaker-correction" data-source-turn-index="${escapeHtml(turn.sourceTurnIndex)}" aria-label="${escapeHtml(correctionLabel)}"><span>${escapeHtml(speakerLabel)}</span>${turn.speakerCorrected ? `<small>Corrected</small>` : ""}</button>`
+            : `<span>${escapeHtml(speakerLabel)}</span>` : ""}
+        </div>
+        <p>${turn.withheld ? "This turn was withheld by the voice check." : escapeHtml(turn.text)}</p>
+      </div>
+    `;
+  }).join("");
   if (workspace) {
     const queryStatus = query
       ? visibleTurns.length
@@ -479,6 +496,7 @@ function renderTranscript(turns, title, detail = "", { copyAction = "", openFile
         <div class="transcript-scroll" tabindex="0" aria-label="Transcript turns">
           ${transcriptLines || `<p class="transcript-empty">${query ? "No retained transcript turn matches that search." : "No transcript turns are available."}</p>`}
         </div>
+        ${turns.some((turn) => turn.speakerCorrected) ? `<p class="transcript-correction-note">Speaker names corrected here are a local review layer. The retained transcript file is unchanged.</p>` : ""}
       </section>
     `;
   }
@@ -636,6 +654,15 @@ function renderMeeting() {
 function renderGenerateNote(note) {
   const control = noteGenerationPresentation(note, state.generatingMeetingId);
   if (!control) return "";
+  const correctionsPendingProjection = state.selected?.transcript?.turns?.some((turn) => turn.speakerCorrected);
+  if (correctionsPendingProjection) {
+    return `
+      <section class="note-section generate-note-section" aria-label="Generate a meeting note">
+        <button class="button button-primary" type="button" disabled>${escapeHtml(control.label)}</button>
+        <p class="note-editor-help">Speaker-name corrections are saved for review, but note regeneration does not use them yet. The existing note was not replaced.</p>
+      </section>
+    `;
+  }
   return `
     <section class="note-section generate-note-section" aria-label="Generate a meeting note">
       <button class="button button-primary" type="button" data-action="${control.action}" ${control.disabled ? "disabled" : ""}>${escapeHtml(control.label)}</button>
@@ -713,6 +740,79 @@ function renderRenameMeetingSheet() {
       </section>
     </div>
   `;
+}
+
+function openSpeakerCorrection(sourceTurnIndex) {
+  const transcript = state.selected?.transcript;
+  const turn = transcript?.turns?.find((candidate) => Number(candidate.sourceTurnIndex) === sourceTurnIndex);
+  if (!turn || turn.withheld || !transcript?.currentTranscriptSha256) return;
+  const sourceSpeaker = turn.sourceSpeaker || null;
+  const sourceLabel = sourceSpeaker || "Unattributed";
+  state.speakerCorrection = {
+    meetingId: transcript.meetingId,
+    sourceTranscriptSha256: transcript.currentTranscriptSha256,
+    sourceSpeaker,
+    sourceLabel,
+  };
+  state.speakerCorrectionDraft = transcriptSpeakerLabel(turn) === "Unattributed"
+    ? ""
+    : transcriptSpeakerLabel(turn);
+  state.modal = "speaker-correction";
+  render();
+  queueMicrotask(() => root.querySelector("#speaker-name-input")?.focus());
+}
+
+function renderSpeakerCorrectionSheet() {
+  const correction = state.speakerCorrection;
+  const turns = state.selected?.transcript?.turns || [];
+  if (!correction) return "";
+  const affected = transcriptTurnsForSourceSpeaker(turns, correction.sourceSpeaker).length;
+  const saving = state.busyAction === "speaker-correction";
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="start-sheet speaker-correction-sheet" role="dialog" aria-modal="true" aria-labelledby="speaker-correction-title">
+        <div class="sheet-head">
+          <div><p class="eyebrow">Transcript attribution</p><h2 id="speaker-correction-title">Name this speaker.</h2><p>This changes the review label for ${affected} matching transcript ${affected === 1 ? "turn" : "turns"}. The retained transcript file stays unchanged.</p></div>
+          <button class="icon-button" type="button" data-action="close-modal" aria-label="Close">×</button>
+        </div>
+        <div class="speaker-correction-source"><span>Source label</span><strong>${escapeHtml(correction.sourceLabel)}</strong></div>
+        <form data-form="speaker-correction">
+          <label class="field-label" for="speaker-name-input">Speaker name
+            <input class="meeting-title-input" id="speaker-name-input" data-field="speaker-name" maxlength="80" value="${escapeHtml(state.speakerCorrectionDraft)}" placeholder="e.g. Alex" autocomplete="off" />
+            <small>Every turn tied to this source label will use the same name in this meeting.</small>
+          </label>
+          <div class="speaker-correction-provenance"><strong>What stays preserved</strong><p>Yawn keeps the original label and records this as a separate local correction. Reopen this control and use the source label to undo it.</p></div>
+          <div class="sheet-actions">
+            <button class="button button-quiet" type="button" data-action="use-source-speaker">Use source label</button>
+            <button class="button button-quiet" type="button" data-action="close-modal">Cancel</button>
+            <button class="button button-primary" type="submit" ${saving || !state.speakerCorrectionDraft.trim() ? "disabled" : ""}>${saving ? "Saving…" : "Save speaker name"}</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+async function saveSpeakerCorrection() {
+  const correction = state.speakerCorrection;
+  const selection = state.selected;
+  const replacement = state.speakerCorrectionDraft.trim();
+  if (!correction || !selection?.row?.meetingId || !replacement) return;
+  await flushSelectedNoteSave();
+  await runBusy("speaker-correction", async () => {
+    const response = await invoke("correct_speaker_name", {
+      meetingId: correction.meetingId,
+      sourceTranscriptSha256: correction.sourceTranscriptSha256,
+      sourceSpeaker: correction.sourceSpeaker,
+      replacement,
+    });
+    if (state.selected !== selection) return;
+    state.modal = "";
+    state.speakerCorrection = null;
+    state.speakerCorrectionDraft = "";
+    state.notice = response.message || "Speaker name saved on this Mac.";
+    await reopenSelectedMeeting(selection.row.meetingId);
+  });
 }
 
 function renderMeetingDeletionSheet() {
@@ -1313,12 +1413,23 @@ function handleClick(event) {
   const action = control.dataset.action;
   if (action === "home" || action === "meetings") void openMeetings();
   else if (action === "open-start") openStart();
-  else if (action === "close-start" || action === "close-modal") { state.modal = ""; render(); }
+  else if (action === "close-start" || action === "close-modal") {
+    state.modal = "";
+    state.speakerCorrection = null;
+    state.speakerCorrectionDraft = "";
+    render();
+  }
   else if (action === "start-recording") void startRecording();
   else if (action === "stop-recording") void stopRecording();
   else if (action === "dismiss-current") void dismissCurrent();
   else if (action === "record-another") void recordAnother();
   else if (action === "open-meeting") void openMeeting(control.dataset.handle);
+  else if (action === "open-speaker-correction") openSpeakerCorrection(Number(control.dataset.sourceTurnIndex));
+  else if (action === "use-source-speaker" && state.speakerCorrection) {
+    state.speakerCorrectionDraft = state.speakerCorrection.sourceLabel;
+    render();
+    queueMicrotask(() => root.querySelector("#speaker-name-input")?.focus());
+  }
   else if (action === "open-claim-evidence") void openClaimEvidence(Number(control.dataset.ordinal));
   else if (action === "toggle-meeting-management") {
     state.meetingManagementOpen = !state.meetingManagementOpen;
@@ -1378,6 +1489,9 @@ function handleInput(event) {
   if (event.target.dataset.field === "meeting-title") {
     state.renameDraft = event.target.value;
   }
+  if (event.target.dataset.field === "speaker-name") {
+    state.speakerCorrectionDraft = event.target.value;
+  }
 }
 
 function handleChange(event) {
@@ -1394,7 +1508,13 @@ function handleChange(event) {
 }
 
 function handleKeydown(event) {
-  if (event.key === "Escape" && state.modal) { state.modal = ""; render(); return; }
+  if (event.key === "Escape" && state.modal) {
+    state.modal = "";
+    state.speakerCorrection = null;
+    state.speakerCorrectionDraft = "";
+    render();
+    return;
+  }
   if (event.key === "Escape" && state.meetingManagementOpen) { state.meetingManagementOpen = false; render(); return; }
   if (!event.metaKey || event.altKey || event.ctrlKey) return;
   if (event.key.toLowerCase() === "r" && canOpenStart(state.snapshot, state.permissions)) {
@@ -1408,9 +1528,11 @@ function handleKeydown(event) {
 }
 
 function handleSubmit(event) {
-  if (event.target.dataset.form !== "rename-meeting") return;
+  const form = event.target.dataset.form;
+  if (!["rename-meeting", "speaker-correction"].includes(form)) return;
   event.preventDefault();
-  void saveMeetingTitle();
+  if (form === "rename-meeting") void saveMeetingTitle();
+  else void saveSpeakerCorrection();
 }
 
 async function initialize() {
