@@ -15,12 +15,12 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::meeting::{
+    ArtifactRef, AudioState, MAX_RECEIPT_BYTES, MeetingError, MeetingLifecycle, MeetingRecord,
     load_meeting, read_private_bytes, require_private_directory, valid_opaque_id,
-    verify_artifact_ref, verify_record_artifacts, write_meeting, ArtifactRef, AudioState,
-    MeetingError, MeetingLifecycle, MeetingRecord, MAX_RECEIPT_BYTES,
+    verify_artifact_ref, verify_record_artifacts, write_meeting,
 };
 use crate::meeting_coordination::{MeetingCoordinationError, MeetingStorageCoordination};
-use crate::storage::{create_private_dir, durable_create_new, durable_replace, StorageRoot};
+use crate::storage::{StorageRoot, create_private_dir, durable_create_new, durable_replace};
 
 const RETRY_DIRECTORY: &str = "transcript-retry";
 const RECEIPT_FILE: &str = "receipt.json";
@@ -553,8 +553,8 @@ fn digest_bytes(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::meeting::{
-        artifact_ref, AudioRetention, AudioRetentionRule, MeetingArtifacts, MeetingSchema,
-        MAX_MEETING_RECORD_BYTES,
+        AudioRetention, AudioRetentionRule, MAX_MEETING_RECORD_BYTES, MeetingArtifacts,
+        MeetingSchema, artifact_ref,
     };
     use crate::storage::StorageRoot;
     use std::os::unix::fs::OpenOptionsExt;
