@@ -636,11 +636,30 @@ quality and device context, selected **Decide later**, and exercised active
 playback with **Stop** before returning with **Back**. No settings, permissions,
 recording, or private data were involved.
 
-This receipt does not show **Keep current**, **Use retry**, correction save or
-regeneration, a generated note, a source link or post-promotion state, a recovery
-toast, or an installed production app. It is not evidence of notarization,
-installation, publication, shipment, or production behavior. Do not describe it
-as a release artifact.
+That first receipt did not show **Keep current**, **Use retry**, correction save
+or regeneration, a generated note, a source link or post-promotion state, a
+recovery toast, or an installed production app. It is not evidence of
+notarization, installation, publication, shipment, or production behavior. Do
+not describe it as a release artifact.
+
+### Stateful retry receipt — 2026-08-17
+
+The recoverable archive command preserved the first review root, then two fresh
+deterministic roots exercised the explicit decisions. **Keep current** closed
+the comparison, left the retained transcript selected, replaced **Review retry**
+with **Retry transcript**, and survived Back and reopen. That root is preserved
+as `.archive-keep-current-20260817`.
+
+On the next fresh root, **Use retry** promoted the candidate and returned to
+transcript-only detail with **Generate note** and **Retry transcript**. The
+canonical fixture root preserves that promoted state. The app is closed.
+
+This did not prove invalidation of an existing generated note because the
+fixture had no note. The promotion toast also overclaimed that a previous note
+was cleared. Fix and re-render that message before accepting the promotion
+journey as complete. Back-and-reopen continuity after promotion remains open.
+No private content, real meeting audio, Settings change, permission change, or
+recording was involved.
 
 ## Encoder-candidate lane (admission evidence, not a release)
 
