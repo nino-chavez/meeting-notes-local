@@ -26,7 +26,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use local_meeting_notes_session_core::meeting::{NoteRevisionRef, load_meeting};
+use local_meeting_notes_session_core::meeting::{
+    AudioState, NoteRevisionRef, load_meeting, read_private_bytes, verify_record_artifacts,
+};
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
 use local_meeting_notes_session_core::note_generation::{
     NoteArtifactError, NoteArtifactInspector, NoteGenerationCoordinator,
@@ -34,15 +36,16 @@ use local_meeting_notes_session_core::note_generation::{
     NoteWorkerResult,
 };
 use local_meeting_notes_session_core::note_projector_process::{
-    GENERATE_MANIFEST_FILE, GenerateNoteRequest, NoteGenerationChildOutcome,
-    ProcessNoteGenerator, admit_note_generator, parse_note_generation_result,
+    GENERATE_MANIFEST_FILE, GenerateNoteRequest, NoteGenerationChildOutcome, ProcessNoteGenerator,
+    admit_note_generator, parse_note_generation_result,
 };
 use local_meeting_notes_session_core::operations::{
     NoteCreateWorkerArgs, NoteCreateWorkerFailure, NoteCreateWorkerFailureCode,
-    TranscriptRestoreWorkerArgs,
+    TranscriptRestoreWorkerArgs, TranscriptRetryUiArgs,
 };
 use local_meeting_notes_session_core::protocol::{
-    Operation, ProtocolError, WorkerCommand, WorkerProgress, WorkerResult,
+    CaptureProgressState, Operation, ProgressEvent, ProtocolError, WorkerCommand, WorkerProgress,
+    WorkerResult,
 };
 use local_meeting_notes_session_core::retention::AppDataWriterLock;
 use local_meeting_notes_session_core::runtime::RuntimeManifest;
@@ -52,11 +55,17 @@ use local_meeting_notes_session_core::transcript_restoration::{
     StoredTranscriptArtifactInspector, TranscriptRestorationCoordinator,
     TranscriptRestorationCoordinatorError, TranscriptRestoreWorker, TranscriptRestoreWorkerError,
 };
+use local_meeting_notes_session_core::transcript_retry::{
+    TranscriptRetryCandidate, TranscriptRetryOutcome, TranscriptRetryPendingCandidate,
+    TranscriptRetrySourceBinding,
+};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::product_facade::{
-    CoordinatorError, MeetingOperationSource, ProductOperationCoordinator,
+    CoordinatorError, MeetingOperationSource, ProductOperationCoordinator, TranscriptRetryDecision,
+    TranscriptRetryOperation,
 };
 use crate::{StorageContext, WORKER_REQUEST_TIMEOUT};
 
@@ -70,6 +79,18 @@ pub(crate) trait WorkerPort: Send + Sync {
         arguments: Value,
         timeout: Duration,
     ) -> Result<WorkerResult, WorkerPortUnavailable>;
+
+    /// Retry uses the worker's transcribing heartbeat. The default keeps
+    /// deterministic fake ports small; the real process port overrides it so
+    /// progress is parsed and admitted rather than rejected as an unknown
+    /// frame by `request`.
+    fn request_transcript_retry(
+        &self,
+        arguments: Value,
+        timeout: Duration,
+    ) -> Result<WorkerResult, WorkerPortUnavailable> {
+        self.request(Operation::TranscriptRetry, arguments, timeout)
+    }
 }
 
 /// The worker process could not serve the exchange at all. Carries the
@@ -124,6 +145,19 @@ impl WorkerPort for ProcessWorkerPort {
         self.request_with_progress(operation, arguments, timeout, |_| {
             Err(ProtocolError::InvalidEvent)
         })
+    }
+
+    fn request_transcript_retry(
+        &self,
+        arguments: Value,
+        timeout: Duration,
+    ) -> Result<WorkerResult, WorkerPortUnavailable> {
+        self.request_with_progress(
+            Operation::TranscriptRetry,
+            arguments,
+            timeout,
+            retry_progress_is_admitted,
+        )
     }
 }
 
@@ -184,11 +218,7 @@ impl WorkerProcessNoteGenerationBridge {
     }
 
     fn admitted_generator(&self) -> Option<ProcessNoteGenerator> {
-        let context = self
-            .storage
-            .lock()
-            .ok()?
-            .clone()?;
+        let context = self.storage.lock().ok()?.clone()?;
         let manifest = RuntimeManifest::load_and_verify(&context.manifest_path).ok()?;
         let catalog = crate::verified_model_catalog(&context.manifest_path, &manifest).ok()??;
         admit_note_generator(
@@ -232,8 +262,8 @@ impl NoteGenerationWorker for WorkerProcessNoteGenerationBridge {
                 }));
             }
         };
-        let mut create_arguments = serde_json::to_value(arguments)
-            .map_err(|_| NoteGenerationWorkerError::Unavailable)?;
+        let mut create_arguments =
+            serde_json::to_value(arguments).map_err(|_| NoteGenerationWorkerError::Unavailable)?;
         let Some(fields) = create_arguments.as_object_mut() else {
             return Err(NoteGenerationWorkerError::Unavailable);
         };
@@ -335,6 +365,15 @@ impl DesktopProductCoordinator {
             .ok_or(CoordinatorError::Unavailable)
     }
 
+    fn writer_lock(&self) -> Result<Arc<AppDataWriterLock>, CoordinatorError> {
+        self.app_data_writer_lock
+            .lock()
+            .map_err(|_| CoordinatorError::Unavailable)?
+            .as_ref()
+            .cloned()
+            .ok_or(CoordinatorError::Unavailable)
+    }
+
     fn restoration_coordinator(
         &self,
     ) -> Result<TranscriptRestorationCoordinator, CoordinatorError> {
@@ -358,6 +397,132 @@ impl DesktopProductCoordinator {
             Arc::new(WorkerProcessNoteInspectBridge::new(self.port.clone())),
         )
         .map_err(|_| CoordinatorError::Unavailable)
+    }
+
+    /// Reads the complete source identity while holding the meeting lease. It
+    /// is deliberately separate from the worker result: the webview never
+    /// names audio paths or digests, and the worker's echoed values are only
+    /// compared to this locally reverified binding.
+    fn retry_source_binding(
+        &self,
+        args: &TranscriptRetryUiArgs,
+    ) -> Result<(StorageRoot, TranscriptRetrySourceBinding), CoordinatorError> {
+        let storage = self.storage_root()?;
+        let coordination = self.coordination()?;
+        let _lease = coordination
+            .acquire(&args.meeting_id.to_string())
+            .map_err(|_| CoordinatorError::Unavailable)?;
+        let meeting_dir = storage
+            .resolve(&Path::new("meetings").join(args.meeting_id.to_string()))
+            .map_err(|_| CoordinatorError::Refused)?;
+        let meeting = load_meeting(&meeting_dir).map_err(|_| CoordinatorError::Refused)?;
+        if meeting.meeting_id != args.meeting_id.to_string()
+            || meeting.retention.state != AudioState::Retained
+            || meeting.pending_storage_operation.is_some()
+        {
+            return Err(CoordinatorError::Refused);
+        }
+        verify_record_artifacts(&meeting_dir, &meeting).map_err(|_| CoordinatorError::Refused)?;
+        let current = meeting
+            .artifacts
+            .current_transcript
+            .as_ref()
+            .ok_or(CoordinatorError::Refused)?;
+        let capture = meeting
+            .artifacts
+            .capture_session
+            .as_ref()
+            .ok_or(CoordinatorError::Refused)?;
+        let microphone = meeting
+            .artifacts
+            .microphone_audio
+            .as_ref()
+            .ok_or(CoordinatorError::Refused)?;
+        let system = meeting
+            .artifacts
+            .system_audio
+            .as_ref()
+            .ok_or(CoordinatorError::Refused)?;
+        if current.sha256 != args.source_transcript_sha256 {
+            return Err(CoordinatorError::Refused);
+        }
+        Ok((
+            storage,
+            TranscriptRetrySourceBinding {
+                source_transcript_sha256: current.sha256.clone(),
+                capture_session_sha256: capture.sha256.clone(),
+                microphone_audio_sha256: microphone.sha256.clone(),
+                system_audio_sha256: system.sha256.clone(),
+                // Filled only after the worker candidate bytes are re-read.
+                candidate_transcript_sha256: String::new(),
+            },
+        ))
+    }
+
+    fn retry_operation(candidate: TranscriptRetryCandidate) -> TranscriptRetryOperation {
+        TranscriptRetryOperation {
+            operation_id: candidate.operation_id,
+            meeting_id: Uuid::parse_str(&candidate.meeting_id).expect("authority validates UUID"),
+            source_transcript_sha256: candidate.source_transcript_sha256,
+            candidate_transcript: candidate.candidate_transcript,
+        }
+    }
+
+    fn retry_operation_from_pending(
+        candidate: TranscriptRetryPendingCandidate,
+    ) -> Result<TranscriptRetryOperation, CoordinatorError> {
+        if candidate.state
+            != local_meeting_notes_session_core::transcript_retry::TranscriptRetryState::CandidateAvailableForComparison
+        {
+            return Err(CoordinatorError::Refused);
+        }
+        Ok(TranscriptRetryOperation {
+            operation_id: candidate.operation_id,
+            meeting_id: Uuid::parse_str(&candidate.meeting_id)
+                .map_err(|_| CoordinatorError::Refused)?,
+            source_transcript_sha256: candidate.source_transcript_sha256,
+            candidate_transcript: local_meeting_notes_session_core::meeting::ArtifactRef {
+                relative_path: format!("transcript/{}.json", candidate.candidate_transcript_sha256),
+                sha256: candidate.candidate_transcript_sha256,
+            },
+        })
+    }
+
+    fn inspect_retry_under_lease(
+        &self,
+        meeting_id: Uuid,
+        operation_id: Uuid,
+    ) -> Result<TranscriptRetryOperation, CoordinatorError> {
+        let coordination = self.coordination()?;
+        let writer = self.writer_lock()?;
+        let _lease = coordination
+            .acquire(&meeting_id.to_string())
+            .map_err(|_| CoordinatorError::Unavailable)?;
+        let candidate = writer
+            .transcript_retry_authority()
+            .inspect_candidate(&meeting_id.to_string(), operation_id)
+            .map_err(|_| CoordinatorError::Refused)?;
+        Ok(Self::retry_operation(candidate))
+    }
+
+    fn discover_pending_retry(
+        &self,
+        args: &TranscriptRetryUiArgs,
+    ) -> Result<Option<TranscriptRetryOperation>, CoordinatorError> {
+        let writer = self.writer_lock()?;
+        let pending = writer
+            .transcript_retry_authority()
+            .discover_pending_candidate(&args.meeting_id.to_string())
+            .map_err(|_| CoordinatorError::Refused)?;
+        match pending {
+            Some(candidate)
+                if candidate.source_transcript_sha256 == args.source_transcript_sha256 =>
+            {
+                Self::retry_operation_from_pending(candidate).map(Some)
+            }
+            Some(_) => Err(CoordinatorError::Refused),
+            None => Ok(None),
+        }
     }
 }
 
@@ -451,6 +616,144 @@ impl ProductOperationCoordinator for DesktopProductCoordinator {
                 _ => CoordinatorError::Refused,
             })
     }
+
+    fn start_transcript_retry(
+        &self,
+        args: &TranscriptRetryUiArgs,
+    ) -> Result<TranscriptRetryOperation, CoordinatorError> {
+        let (storage, expected) = self.retry_source_binding(args)?;
+        if let Some(pending) = self.discover_pending_retry(args)? {
+            return Ok(pending);
+        }
+        let worker_result = self
+            .port
+            .request_transcript_retry(
+                serde_json::json!({
+                    "meeting_id": args.meeting_id.to_string(),
+                    "source_transcript_sha256": expected.source_transcript_sha256,
+                    "capture_session_sha256": expected.capture_session_sha256,
+                    "microphone_audio_sha256": expected.microphone_audio_sha256,
+                    "system_audio_sha256": expected.system_audio_sha256,
+                }),
+                WORKER_REQUEST_TIMEOUT,
+            )
+            .map_err(|_| CoordinatorError::Unavailable)?;
+        if !worker_result.ok {
+            return Err(CoordinatorError::Refused);
+        }
+        let binding = retry_worker_binding(&worker_result.artifact_digests, &expected)?;
+        let meeting_dir = storage
+            .resolve(&Path::new("meetings").join(args.meeting_id.to_string()))
+            .map_err(|_| CoordinatorError::Refused)?;
+        let candidate_path = meeting_dir
+            .join("transcript")
+            .join(format!("{}.json", binding.candidate_transcript_sha256));
+        let candidate_bytes = read_private_bytes(&candidate_path, 16 * 1024 * 1024)
+            .map_err(|_| CoordinatorError::Refused)?;
+        if format!("{:x}", Sha256::digest(&candidate_bytes)) != binding.candidate_transcript_sha256
+        {
+            return Err(CoordinatorError::Refused);
+        }
+        // The digest is now tied to the bytes in storage, rather than to the
+        // worker's result map. The authority re-verifies all four sources and
+        // writes the sole durable candidate receipt under its own lease.
+        let operation_id = Uuid::new_v4();
+        let writer = self.writer_lock()?;
+        writer
+            .transcript_retry_authority()
+            .create_candidate(
+                &args.meeting_id.to_string(),
+                operation_id,
+                &candidate_bytes,
+                &binding,
+            )
+            .map_err(|_| CoordinatorError::Refused)?;
+        self.inspect_retry_under_lease(args.meeting_id, operation_id)
+    }
+
+    fn pending_transcript_retry(
+        &self,
+        args: &TranscriptRetryUiArgs,
+    ) -> Result<Option<TranscriptRetryOperation>, CoordinatorError> {
+        let _ = self.retry_source_binding(args)?;
+        self.discover_pending_retry(args)
+    }
+
+    fn decide_transcript_retry(
+        &self,
+        operation: &TranscriptRetryOperation,
+        decision: TranscriptRetryDecision,
+    ) -> Result<TranscriptRetryOutcome, CoordinatorError> {
+        let _ = self.retry_source_binding(&TranscriptRetryUiArgs {
+            meeting_id: operation.meeting_id,
+            source_transcript_sha256: operation.source_transcript_sha256.clone(),
+        })?;
+        let writer = self.writer_lock()?;
+        let authority = writer.transcript_retry_authority();
+        let candidate = authority
+            .inspect_candidate(&operation.meeting_id.to_string(), operation.operation_id)
+            .map_err(|_| CoordinatorError::Refused)?;
+        if candidate.source_transcript_sha256 != operation.source_transcript_sha256
+            || candidate.candidate_transcript != operation.candidate_transcript
+        {
+            return Err(CoordinatorError::Refused);
+        }
+        match decision {
+            TranscriptRetryDecision::KeepCurrent => {
+                authority.keep_current(&operation.meeting_id.to_string(), operation.operation_id)
+            }
+            TranscriptRetryDecision::UseRetry => authority
+                .promote_candidate(&operation.meeting_id.to_string(), operation.operation_id),
+        }
+        .map_err(|_| CoordinatorError::Refused)
+    }
+}
+
+fn retry_worker_binding(
+    digests: &HashMap<String, String>,
+    expected: &TranscriptRetrySourceBinding,
+) -> Result<TranscriptRetrySourceBinding, CoordinatorError> {
+    const KEYS: [&str; 5] = [
+        "candidate-transcript",
+        "source-transcript",
+        "capture-session",
+        "capture-mic",
+        "capture-system",
+    ];
+    if digests.len() != KEYS.len()
+        || KEYS.iter().any(|key| !digests.contains_key(*key))
+        || digests.values().any(|digest| !valid_sha256(digest))
+        || digests["source-transcript"] != expected.source_transcript_sha256
+        || digests["capture-session"] != expected.capture_session_sha256
+        || digests["capture-mic"] != expected.microphone_audio_sha256
+        || digests["capture-system"] != expected.system_audio_sha256
+    {
+        return Err(CoordinatorError::Refused);
+    }
+    Ok(TranscriptRetrySourceBinding {
+        source_transcript_sha256: expected.source_transcript_sha256.clone(),
+        capture_session_sha256: expected.capture_session_sha256.clone(),
+        microphone_audio_sha256: expected.microphone_audio_sha256.clone(),
+        system_audio_sha256: expected.system_audio_sha256.clone(),
+        candidate_transcript_sha256: digests["candidate-transcript"].clone(),
+    })
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn retry_progress_is_admitted(progress: &WorkerProgress) -> Result<(), ProtocolError> {
+    if progress.event == ProgressEvent::CaptureState
+        && progress.state == CaptureProgressState::Transcribing
+    {
+        Ok(())
+    } else {
+        Err(ProtocolError::InvalidEvent)
+    }
 }
 
 #[cfg(test)]
@@ -461,8 +764,10 @@ mod tests {
     use local_meeting_notes_session_core::meeting::MeetingLifecycle;
     use local_meeting_notes_session_core::operations::{
         RegenerateNoteUiArgs, RestoreWithheldTurnUiArgs, SpeakerLabelOverride,
+        TranscriptRetryUiArgs,
     };
-    use local_meeting_notes_session_core::protocol::ResultSchema;
+    use local_meeting_notes_session_core::protocol::{ResultSchema, WorkerEventSchema};
+    use local_meeting_notes_session_core::storage::durable_create_new;
     use serde_json::json;
     use sha2::{Digest, Sha256};
 
@@ -669,6 +974,239 @@ mod tests {
         ])
     }
 
+    fn retry_args(fixture: &RuntimeFixture) -> TranscriptRetryUiArgs {
+        TranscriptRetryUiArgs {
+            meeting_id: fixture.meeting_id,
+            source_transcript_sha256: fixture.transcript_sha256.clone(),
+        }
+    }
+
+    fn retry_digests(fixture: &RuntimeFixture, candidate_bytes: &[u8]) -> HashMap<String, String> {
+        let storage = fixture
+            .state
+            .storage
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .storage
+            .clone();
+        let directory = storage
+            .resolve(&Path::new("meetings").join(fixture.meeting_id.to_string()))
+            .unwrap();
+        let candidate_sha = format!("{:x}", Sha256::digest(candidate_bytes));
+        durable_create_new(
+            &directory
+                .join("transcript")
+                .join(format!("{candidate_sha}.json")),
+            candidate_bytes,
+        )
+        .unwrap();
+        let meeting = load_meeting(&directory).unwrap();
+        [
+            ("candidate-transcript", candidate_sha),
+            ("source-transcript", fixture.transcript_sha256.clone()),
+            (
+                "capture-session",
+                meeting.artifacts.capture_session.unwrap().sha256,
+            ),
+            (
+                "capture-mic",
+                meeting.artifacts.microphone_audio.unwrap().sha256,
+            ),
+            (
+                "capture-system",
+                meeting.artifacts.system_audio.unwrap().sha256,
+            ),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value))
+        .collect()
+    }
+
+    #[test]
+    fn retry_progress_accepts_only_the_transcribing_heartbeat() {
+        let progress = WorkerProgress {
+            schema: WorkerEventSchema::V2,
+            request_id: Uuid::new_v4(),
+            event: ProgressEvent::CaptureState,
+            state: CaptureProgressState::Transcribing,
+            meeting_id: Uuid::new_v4(),
+        };
+        assert_eq!(retry_progress_is_admitted(&progress), Ok(()));
+        let wrong_state = WorkerProgress {
+            state: CaptureProgressState::Recording,
+            ..progress
+        };
+        assert_eq!(
+            retry_progress_is_admitted(&wrong_state),
+            Err(ProtocolError::InvalidEvent)
+        );
+    }
+
+    #[test]
+    fn retry_worker_digest_map_is_closed_and_binds_all_five_artifacts() {
+        let expected = TranscriptRetrySourceBinding {
+            source_transcript_sha256: "a".repeat(64),
+            capture_session_sha256: "b".repeat(64),
+            microphone_audio_sha256: "c".repeat(64),
+            system_audio_sha256: "d".repeat(64),
+            candidate_transcript_sha256: String::new(),
+        };
+        let digests = HashMap::from([
+            ("candidate-transcript".into(), "e".repeat(64)),
+            (
+                "source-transcript".into(),
+                expected.source_transcript_sha256.clone(),
+            ),
+            (
+                "capture-session".into(),
+                expected.capture_session_sha256.clone(),
+            ),
+            (
+                "capture-mic".into(),
+                expected.microphone_audio_sha256.clone(),
+            ),
+            (
+                "capture-system".into(),
+                expected.system_audio_sha256.clone(),
+            ),
+        ]);
+        assert_eq!(
+            retry_worker_binding(&digests, &expected)
+                .unwrap()
+                .candidate_transcript_sha256,
+            "e".repeat(64)
+        );
+        let mut malformed = digests.clone();
+        malformed.insert("extra".into(), "f".repeat(64));
+        assert_eq!(
+            retry_worker_binding(&malformed, &expected),
+            Err(CoordinatorError::Refused)
+        );
+        let mut stale = digests;
+        stale.insert("capture-mic".into(), "f".repeat(64));
+        assert_eq!(
+            retry_worker_binding(&stale, &expected),
+            Err(CoordinatorError::Refused)
+        );
+    }
+
+    #[test]
+    fn retry_start_keeps_the_current_pointer_and_keep_is_the_only_receipt_change() {
+        let fixture = runtime_fixture(gated_turns());
+        let candidate = serde_json::to_vec(&json!({
+            "schema": "capture-transcript/1",
+            "source": "retry",
+            "attribution": "channel",
+            "bleed": null,
+            "voiceprint": null,
+            "capture_health": {},
+            "turns": [{ "start": 0.0, "end": 1.0, "speaker": "Me", "text": "retry" }],
+        }))
+        .unwrap();
+        let digests = retry_digests(&fixture, &candidate);
+        let port = Arc::new(FakePort::new(FakeOutcome::Accept(digests)));
+        let coordinator = coordinator_for(&fixture, port.clone());
+        let storage = fixture
+            .state
+            .storage
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .storage
+            .clone();
+        let directory = storage
+            .resolve(&Path::new("meetings").join(fixture.meeting_id.to_string()))
+            .unwrap();
+        let before = std::fs::read(directory.join("meeting.json")).unwrap();
+
+        let operation = coordinator
+            .start_transcript_retry(&retry_args(&fixture))
+            .unwrap();
+        assert_eq!(
+            std::fs::read(directory.join("meeting.json")).unwrap(),
+            before
+        );
+        assert_eq!(
+            operation.source_transcript_sha256,
+            fixture.transcript_sha256
+        );
+        let requests = port.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].0, Operation::TranscriptRetry);
+        assert_eq!(
+            requests[0].1["source_transcript_sha256"],
+            fixture.transcript_sha256
+        );
+        drop(requests);
+
+        assert_eq!(
+            coordinator
+                .decide_transcript_retry(&operation, TranscriptRetryDecision::KeepCurrent)
+                .unwrap(),
+            TranscriptRetryOutcome::CurrentKept
+        );
+        assert_eq!(
+            std::fs::read(directory.join("meeting.json")).unwrap(),
+            before
+        );
+        assert!(
+            coordinator
+                .pending_transcript_retry(&retry_args(&fixture))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn retry_promotion_changes_only_the_current_transcript_pointer() {
+        let fixture = runtime_fixture(gated_turns());
+        let candidate = serde_json::to_vec(&json!({
+            "schema": "capture-transcript/1",
+            "source": "retry",
+            "attribution": "channel",
+            "bleed": null,
+            "voiceprint": null,
+            "capture_health": {},
+            "turns": [{ "start": 0.0, "end": 1.0, "speaker": "Me", "text": "retry" }],
+        }))
+        .unwrap();
+        let port = Arc::new(FakePort::new(FakeOutcome::Accept(retry_digests(
+            &fixture, &candidate,
+        ))));
+        let coordinator = coordinator_for(&fixture, port);
+        let operation = coordinator
+            .start_transcript_retry(&retry_args(&fixture))
+            .unwrap();
+        assert_eq!(
+            coordinator
+                .decide_transcript_retry(&operation, TranscriptRetryDecision::UseRetry)
+                .unwrap(),
+            TranscriptRetryOutcome::CandidatePromoted
+        );
+        let storage = fixture
+            .state
+            .storage
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .storage
+            .clone();
+        let directory = storage
+            .resolve(&Path::new("meetings").join(fixture.meeting_id.to_string()))
+            .unwrap();
+        let meeting = load_meeting(&directory).unwrap();
+        assert_eq!(
+            meeting.artifacts.current_transcript,
+            Some(operation.candidate_transcript)
+        );
+        assert!(meeting.artifacts.current_note.is_none());
+        assert_eq!(meeting.lifecycle, MeetingLifecycle::TranscriptReady);
+    }
+
     #[test]
     fn source_for_reflects_the_stored_meeting_record() {
         let fixture = runtime_fixture(gated_turns());
@@ -841,8 +1379,11 @@ mod tests {
             .storage
             .resolve(&Path::new("meetings").join(fixture.meeting_id.to_string()))
             .unwrap();
-        std::fs::write(meeting_dir.join("speaker-corrections.json"), b"{not corrections")
-            .unwrap();
+        std::fs::write(
+            meeting_dir.join("speaker-corrections.json"),
+            b"{not corrections",
+        )
+        .unwrap();
         let port = Arc::new(FakePort::new(FakeOutcome::Accept(HashMap::new())));
         let coordinator = coordinator_for(&fixture, port.clone());
 

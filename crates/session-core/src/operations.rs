@@ -49,6 +49,16 @@ pub struct RegenerateNoteUiArgs {
     pub vocabulary_replacements: Vec<VocabularyRangeReplacement>,
 }
 
+/// The browser may name only the transcript it is comparing. The desktop
+/// process derives the retained capture and audio identities under its meeting
+/// lease; accepting caller-supplied audio identities would weaken that bound.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranscriptRetryUiArgs {
+    pub meeting_id: Uuid,
+    pub source_transcript_sha256: String,
+}
+
 /// One exact source speaker group and the label the note generator may see.
 ///
 /// The closed three-group vocabulary mirrors the capture transcript: the
@@ -85,6 +95,7 @@ pub struct NoteCreateWorkerArgs {
 pub enum ProductOperationKind {
     RestoreWithheldTurn,
     GenerateNote,
+    TranscriptRetry,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,6 +103,7 @@ pub enum ProductOperationKind {
 pub enum UiOperationState {
     Correcting,
     Summarizing,
+    Transcribing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -292,6 +304,12 @@ impl RegenerateNoteUiArgs {
     }
 }
 
+impl TranscriptRetryUiArgs {
+    pub fn validate(&self) -> Result<(), OperationContractError> {
+        validate_digest(&self.source_transcript_sha256)
+    }
+}
+
 impl TranscriptRestoreWorkerArgs {
     pub fn validate(&self) -> Result<(), OperationContractError> {
         validate_digest(&self.source_transcript_sha256)
@@ -316,6 +334,9 @@ impl UiOperationAccepted {
             ) | (
                 ProductOperationKind::GenerateNote,
                 UiOperationState::Summarizing
+            ) | (
+                ProductOperationKind::TranscriptRetry,
+                UiOperationState::Transcribing
             )
         ) {
             return Err(OperationContractError::Malformed(
@@ -1418,5 +1439,27 @@ mod tests {
         );
         arguments.vocabulary_replacements[0].char_end = 1;
         assert!(arguments.validate().is_err());
+    }
+
+    #[test]
+    fn transcript_retry_ui_arguments_are_exact_and_reject_unknown_fields() {
+        let arguments = TranscriptRetryUiArgs {
+            meeting_id: Uuid::new_v4(),
+            source_transcript_sha256: "a".repeat(64),
+        };
+        arguments.validate().unwrap();
+        assert_eq!(
+            serde_json::to_value(&arguments).unwrap(),
+            serde_json::json!({
+                "meetingId": arguments.meeting_id,
+                "sourceTranscriptSha256": arguments.source_transcript_sha256,
+            })
+        );
+        let mut malformed = serde_json::to_value(arguments).unwrap();
+        malformed
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".into(), Value::Bool(true));
+        assert!(serde_json::from_value::<TranscriptRetryUiArgs>(malformed).is_err());
     }
 }

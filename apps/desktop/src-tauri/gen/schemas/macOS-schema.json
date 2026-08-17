@@ -531,6 +531,24 @@
           "markdownDescription": "Enables the transcript_model_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the transcript_retry_decide command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-transcript-retry-decide",
+          "markdownDescription": "Enables the transcript_retry_decide command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the transcript_retry_pending command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-transcript-retry-pending",
+          "markdownDescription": "Enables the transcript_retry_pending command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the transcript_retry_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-transcript-retry-start",
+          "markdownDescription": "Enables the transcript_retry_start command without any pre-configured scope."
+        },
+        {
           "description": "Denies the app_snapshot command without any pre-configured scope.",
           "type": "string",
           "const": "deny-app-snapshot",
@@ -883,6 +901,24 @@
           "type": "string",
           "const": "deny-transcript-model-settings",
           "markdownDescription": "Denies the transcript_model_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the transcript_retry_decide command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-transcript-retry-decide",
+          "markdownDescription": "Denies the transcript_retry_decide command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the transcript_retry_pending command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-transcript-retry-pending",
+          "markdownDescription": "Denies the transcript_retry_pending command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the transcript_retry_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-transcript-retry-start",
+          "markdownDescription": "Denies the transcript_retry_start command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

@@ -62,6 +62,9 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "open_current_transcript_file",
     "restore_withheld_turn",
     "regenerate_note",
+    "transcript_retry_start",
+    "transcript_retry_pending",
+    "transcript_retry_decide",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,7 +113,10 @@ pub fn validate(mode: BuildMode, config: &Value) -> Result<(), &'static str> {
 fn is_preview_config(config: &Value) -> bool {
     config.get("productName").and_then(Value::as_str) == Some("Yawn Preview")
         && config.get("identifier").and_then(Value::as_str) == Some(PREVIEW_IDENTIFIER)
-        && config.pointer("/build/frontendDist").and_then(Value::as_str) == Some(PREVIEW_FRONTEND)
+        && config
+            .pointer("/build/frontendDist")
+            .and_then(Value::as_str)
+            == Some(PREVIEW_FRONTEND)
         && has_single_window(
             config.pointer("/app/windows"),
             PREVIEW_WINDOW,
@@ -139,7 +145,10 @@ fn is_preview_config(config: &Value) -> bool {
 fn is_production_config(config: &Value) -> bool {
     config.get("productName").and_then(Value::as_str) == Some("Yawn")
         && config.get("identifier").and_then(Value::as_str) == Some(PRODUCTION_IDENTIFIER)
-        && config.pointer("/build/frontendDist").and_then(Value::as_str) == Some(PRODUCTION_FRONTEND)
+        && config
+            .pointer("/build/frontendDist")
+            .and_then(Value::as_str)
+            == Some(PRODUCTION_FRONTEND)
         && has_single_window(config.pointer("/app/windows"), PRODUCTION_WINDOW, "Yawn")
         && has_exact_strings(
             config.pointer("/app/security/capabilities"),
