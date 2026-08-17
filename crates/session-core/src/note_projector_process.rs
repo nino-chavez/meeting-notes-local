@@ -34,8 +34,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::local_vocabulary::{
-    LOCAL_VOCABULARY_MAX_ENTRY_TEXT_BYTES, LOCAL_VOCABULARY_MAX_RANGE_REPLACEMENTS,
-    VocabularyRangeReplacement,
+    VocabularyRangeReplacement, vocabulary_range_replacements_are_valid,
 };
 use crate::meeting::valid_opaque_id;
 use crate::model_store::{
@@ -1992,39 +1991,11 @@ fn validate_generate_request(request: &GenerateNoteRequest) -> Result<(), Intern
     if !valid_opaque_id(&request.meeting_id)
         || !valid_digest(&request.transcript_sha256)
         || !speaker_label_overrides_are_valid(&request.speaker_label_overrides)
-        || !vocabulary_replacements_are_valid(&request.vocabulary_replacements)
+        || !vocabulary_range_replacements_are_valid(&request.vocabulary_replacements)
     {
         return Err(InternalOutcome::Unavailable);
     }
     Ok(())
-}
-
-fn vocabulary_replacements_are_valid(replacements: &[VocabularyRangeReplacement]) -> bool {
-    if replacements.len() > LOCAL_VOCABULARY_MAX_RANGE_REPLACEMENTS {
-        return false;
-    }
-    let mut previous = None;
-    for replacement in replacements {
-        let position = (
-            replacement.turn,
-            replacement.char_start,
-            replacement.char_end,
-        );
-        if replacement.char_start >= replacement.char_end
-            || replacement.replacement.is_empty()
-            || replacement.replacement.len() > LOCAL_VOCABULARY_MAX_ENTRY_TEXT_BYTES
-            || replacement.replacement.chars().any(char::is_control)
-            || !valid_digest(&replacement.source_sha256)
-            || previous.is_some_and(|prior| prior >= position)
-            || previous.is_some_and(|prior: (u32, u32, u32)| {
-                prior.0 == replacement.turn && replacement.char_start < prior.2
-            })
-        {
-            return false;
-        }
-        previous = Some(position);
-    }
-    true
 }
 
 fn speaker_label_overrides_are_valid(overrides: &[SpeakerLabelOverride]) -> bool {

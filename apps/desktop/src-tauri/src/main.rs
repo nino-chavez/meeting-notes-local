@@ -5258,6 +5258,58 @@ pub(crate) fn speaker_label_overrides_for(
         })
 }
 
+/// Derive the prompt-only vocabulary overlay from the same verified meeting
+/// projection the review screen uses. Withheld rows carry empty text, so their
+/// source indices stay stable without exposing or replacing withheld words.
+pub(crate) fn vocabulary_replacements_for(
+    meeting_id: Uuid,
+    source_transcript_sha256: &str,
+    state: &ApplicationState,
+) -> Result<
+    Vec<local_meeting_notes_session_core::local_vocabulary::VocabularyRangeReplacement>,
+    String,
+> {
+    let storage = preview_storage_clone(state).map_err(|_| {
+        "Local meeting storage is unavailable. Reopen the app and try again.".to_string()
+    })?;
+    let directory = meeting_dir(&storage, &meeting_id.to_string()).map_err(error_text)?;
+    current_vocabulary_replacements(
+        &storage,
+        &directory,
+        meeting_id,
+        source_transcript_sha256,
+    )
+}
+
+pub(crate) fn current_vocabulary_replacements(
+    storage: &StorageRoot,
+    meeting_directory: &Path,
+    meeting_id: Uuid,
+    source_transcript_sha256: &str,
+) -> Result<
+    Vec<local_meeting_notes_session_core::local_vocabulary::VocabularyRangeReplacement>,
+    String,
+> {
+    let meeting = load_meeting(meeting_directory).map_err(error_text)?;
+    let current = meeting
+        .artifacts
+        .current_transcript
+        .as_ref()
+        .ok_or_else(|| "This meeting no longer has a retained transcript.".to_string())?;
+    if current.sha256 != source_transcript_sha256 || meeting.meeting_id != meeting_id.to_string() {
+        return Err("The transcript changed. Refresh the meeting and try again.".into());
+    }
+    let (turns, _) = load_transcript_projection(
+        meeting_directory,
+        &meeting_id.to_string(),
+        current,
+    )?;
+    let source_turns = turns.iter().map(|turn| turn.text.as_str()).collect::<Vec<_>>();
+    local_meeting_notes_session_core::local_vocabulary::LocalVocabularyStore::open(storage)
+        .and_then(|vocabulary| vocabulary.project_turns(&source_turns))
+        .map_err(|_| "Local vocabulary could not be verified, so the note was not replaced.".into())
+}
+
 fn main() {
     let state = ApplicationState::default();
     // Managed now so registering the facade commands later is one move; the

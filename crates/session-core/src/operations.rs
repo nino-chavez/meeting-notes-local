@@ -5,6 +5,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::local_vocabulary::{
+    VocabularyRangeReplacement, vocabulary_range_replacements_are_valid,
+};
 use crate::meeting::{ArtifactRef, MeetingLifecycle, MeetingRecord, NoteRevisionRef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +44,9 @@ pub struct RegenerateNoteUiArgs {
     /// the evidence identity.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub speaker_label_overrides: Vec<SpeakerLabelOverride>,
+    /// Prompt-only text substitutions tied to exact retained-source spans.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocabulary_replacements: Vec<VocabularyRangeReplacement>,
 }
 
 /// One exact source speaker group and the label the note generator may see.
@@ -70,6 +76,8 @@ pub struct NoteCreateWorkerArgs {
     pub source_transcript_sha256: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub speaker_label_overrides: Vec<SpeakerLabelOverride>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocabulary_replacements: Vec<VocabularyRangeReplacement>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -157,6 +165,8 @@ pub struct NoteGenerationRequest {
     pub source_transcript_sha256: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub speaker_label_overrides: Vec<SpeakerLabelOverride>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocabulary_replacements: Vec<VocabularyRangeReplacement>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prior_note: Option<NoteRevisionRef>,
 }
@@ -277,7 +287,8 @@ impl RestoreWithheldTurnUiArgs {
 impl RegenerateNoteUiArgs {
     pub fn validate(&self) -> Result<(), OperationContractError> {
         validate_digest(&self.source_transcript_sha256)?;
-        validate_speaker_label_overrides(&self.speaker_label_overrides)
+        validate_speaker_label_overrides(&self.speaker_label_overrides)?;
+        validate_vocabulary_replacements(&self.vocabulary_replacements)
     }
 }
 
@@ -290,7 +301,8 @@ impl TranscriptRestoreWorkerArgs {
 impl NoteCreateWorkerArgs {
     pub fn validate(&self) -> Result<(), OperationContractError> {
         validate_digest(&self.source_transcript_sha256)?;
-        validate_speaker_label_overrides(&self.speaker_label_overrides)
+        validate_speaker_label_overrides(&self.speaker_label_overrides)?;
+        validate_vocabulary_replacements(&self.vocabulary_replacements)
     }
 }
 
@@ -367,6 +379,7 @@ impl NoteGenerationRequest {
         }
         validate_digest(&self.source_transcript_sha256)?;
         validate_speaker_label_overrides(&self.speaker_label_overrides)?;
+        validate_vocabulary_replacements(&self.vocabulary_replacements)?;
         match (self.schema, &self.prior_note) {
             (NoteGenerationRequestSchema::V1, Some(_)) => Err(OperationContractError::Malformed(
                 "request/1 cannot replace a prior note",
@@ -917,6 +930,18 @@ fn validate_speaker_label_overrides(
     Ok(())
 }
 
+fn validate_vocabulary_replacements(
+    replacements: &[VocabularyRangeReplacement],
+) -> Result<(), OperationContractError> {
+    if vocabulary_range_replacements_are_valid(replacements) {
+        Ok(())
+    } else {
+        Err(OperationContractError::Malformed(
+            "vocabulary replacement overlay is invalid",
+        ))
+    }
+}
+
 fn digest_pretty<T: Serialize>(value: &T) -> Result<String, OperationContractError> {
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|_| OperationContractError::Malformed("contract cannot be serialized"))?;
@@ -1345,17 +1370,23 @@ mod tests {
     }
 
     #[test]
-    fn speaker_label_overlay_is_bounded_and_absent_from_legacy_wire_shapes() {
+    fn note_overlays_are_bounded_and_absent_from_legacy_wire_shapes() {
         let mut arguments = NoteCreateWorkerArgs {
             meeting_id: Uuid::new_v4(),
             source_transcript_sha256: "a".repeat(64),
             speaker_label_overrides: Vec::new(),
+            vocabulary_replacements: Vec::new(),
         };
         arguments.validate().unwrap();
         assert!(
             !serde_json::to_string(&arguments)
                 .unwrap()
                 .contains("speaker_label_overrides")
+        );
+        assert!(
+            !serde_json::to_string(&arguments)
+                .unwrap()
+                .contains("vocabulary_replacements")
         );
 
         arguments.speaker_label_overrides = vec![SpeakerLabelOverride {
@@ -1370,6 +1401,22 @@ mod tests {
         );
 
         arguments.speaker_label_overrides[0].source_speaker = Some("Other".into());
+        assert!(arguments.validate().is_err());
+        arguments.speaker_label_overrides.clear();
+        arguments.vocabulary_replacements = vec![VocabularyRangeReplacement {
+            turn: 0,
+            char_start: 1,
+            char_end: 4,
+            source_sha256: "b".repeat(64),
+            replacement: "Kibble".into(),
+        }];
+        arguments.validate().unwrap();
+        assert!(
+            serde_json::to_string(&arguments)
+                .unwrap()
+                .contains("vocabulary_replacements")
+        );
+        arguments.vocabulary_replacements[0].char_end = 1;
         assert!(arguments.validate().is_err());
     }
 }

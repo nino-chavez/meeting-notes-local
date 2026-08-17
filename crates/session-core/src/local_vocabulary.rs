@@ -105,6 +105,43 @@ pub struct VocabularyRangeReplacement {
     pub replacement: String,
 }
 
+/// Validate the one canonical transport shape shared by durable operations
+/// and the note-generator child. Source bytes are re-derived later, after the
+/// retained transcript has passed its whole-artifact digest check.
+pub fn vocabulary_range_replacements_are_valid(
+    replacements: &[VocabularyRangeReplacement],
+) -> bool {
+    if replacements.len() > MAX_RANGE_REPLACEMENTS {
+        return false;
+    }
+    let mut previous = None;
+    for replacement in replacements {
+        let position = (
+            replacement.turn,
+            replacement.char_start,
+            replacement.char_end,
+        );
+        if replacement.char_start >= replacement.char_end
+            || replacement.replacement.is_empty()
+            || replacement.replacement.len() > MAX_ENTRY_TEXT_BYTES
+            || replacement.replacement.chars().any(char::is_control)
+            || replacement.source_sha256.len() != 64
+            || !replacement
+                .source_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            || previous.is_some_and(|prior| prior >= position)
+            || previous.is_some_and(|prior: (u32, u32, u32)| {
+                prior.0 == replacement.turn && replacement.char_start < prior.2
+            })
+        {
+            return false;
+        }
+        previous = Some(position);
+    }
+    true
+}
+
 #[derive(Debug, Clone)]
 pub struct LocalVocabularyStore {
     root: PathBuf,

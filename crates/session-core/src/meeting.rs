@@ -496,8 +496,6 @@ fn verify_recovered_capture_receipt(
         }
         "capture-session/2" => {
             let receipt: CaptureSessionReceipt = serde_json::from_value(value)?;
-            let _quality_present = receipt.quality.is_some();
-            let _microphone_present = receipt.microphone.is_some();
             if receipt.status != CaptureSessionStatus::Complete
                 || !receipt.started_at.is_string()
                 || !receipt.finalized_at.is_string()
@@ -572,10 +570,10 @@ struct CaptureSessionReceipt {
     started_at: Value,
     finalized_at: Value,
     health: Value,
-    #[serde(default)]
-    quality: Option<Value>,
-    #[serde(default)]
-    microphone: Option<Value>,
+    #[serde(default, rename = "quality")]
+    _quality: Option<Value>,
+    #[serde(default, rename = "microphone")]
+    _microphone: Option<Value>,
     reconciliation: Value,
     artifacts: Vec<CaptureReceiptArtifact>,
 }

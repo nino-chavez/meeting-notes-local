@@ -276,6 +276,7 @@ impl NoteGenerationCoordinator {
             requested_at_epoch_seconds: self.identities.now_epoch_seconds(),
             source_transcript_sha256: arguments.source_transcript_sha256.clone(),
             speaker_label_overrides: arguments.speaker_label_overrides.clone(),
+            vocabulary_replacements: arguments.vocabulary_replacements.clone(),
             prior_note: meeting.artifacts.current_note.clone(),
         };
         request.validate()?;
@@ -373,6 +374,7 @@ impl NoteGenerationCoordinator {
             meeting_id: request.meeting_id,
             source_transcript_sha256: request.source_transcript_sha256.clone(),
             speaker_label_overrides: request.speaker_label_overrides.clone(),
+            vocabulary_replacements: request.vocabulary_replacements.clone(),
         };
         let result = match self.worker.create(&arguments)? {
             NoteWorkerResult::Accepted(worker_digests) => {
@@ -1005,6 +1007,7 @@ mod tests {
                 meeting_id: self.meeting_id,
                 source_transcript_sha256: self.transcript.clone(),
                 speaker_label_overrides: Vec::new(),
+                vocabulary_replacements: Vec::new(),
             }
         }
 
@@ -1193,6 +1196,7 @@ mod tests {
             meeting_id: fixture.meeting_id,
             source_transcript_sha256: "a".repeat(64),
             speaker_label_overrides: Vec::new(),
+            vocabulary_replacements: Vec::new(),
         };
         assert!(matches!(
             fixture
@@ -1330,6 +1334,7 @@ mod tests {
                         requested_at_epoch_seconds: 1,
                         source_transcript_sha256: fixture.transcript.clone(),
                         speaker_label_overrides: Vec::new(),
+                        vocabulary_replacements: Vec::new(),
                         prior_note: None,
                     },
                 ))

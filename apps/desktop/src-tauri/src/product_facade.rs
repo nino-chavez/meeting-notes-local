@@ -257,6 +257,11 @@ pub(crate) fn regenerate_note(
                 &source_transcript_sha256,
                 &app,
             )?,
+            vocabulary_replacements: crate::vocabulary_replacements_for(
+                meeting_id,
+                &source_transcript_sha256,
+                &app,
+            )?,
             source_transcript_sha256,
         })
         .map_err(ProductOperationFacadeError::safe_copy)
