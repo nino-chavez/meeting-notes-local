@@ -27,9 +27,11 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 const BUNDLE_NAME: &str = "com.ninochavez.local-meeting-notes.fixture";
-const MEETING_ID: &str = "fixture-meeting-001";
+const MEETING_ID: &str = "11111111-1111-4111-8111-111111111111";
 const OPERATION_ID: &str = "22222222-2222-4222-8222-222222222222";
 const CREATED_AT: u64 = 1_700_000_042;
+const AUDIO_SAMPLE_RATE: u32 = 8_000;
+const AUDIO_FRAMES: usize = AUDIO_SAMPLE_RATE as usize * 8;
 
 #[derive(Debug, thiserror::Error)]
 enum FixtureError {
@@ -122,8 +124,8 @@ fn seed(root: &Path, repository: PathBuf) -> Result<(), FixtureError> {
 "#,
     )?;
 
-    let mic = wav(220, 160);
-    let system = wav(440, 160);
+    let mic = wav(AUDIO_FRAMES);
+    let system = wav(AUDIO_FRAMES);
     write_new(&meeting_dir.join("capture/mic.wav"), &mic)?;
     write_new(&meeting_dir.join("capture/system.wav"), &system)?;
     let mic_ref = artifact_ref(&meeting_dir, "capture/mic.wav")?;
@@ -136,8 +138,8 @@ fn seed(root: &Path, repository: PathBuf) -> Result<(), FixtureError> {
         "health": {"schema":"capture-health/1","usable":true},
         "quality": {
             "schema": "capture-quality/1",
-            "source": {"leg":"mic","artifact":"mic.wav","samples":160,"sha256":mic_ref.sha256},
-            "metrics": {"duration_s":0.02},
+            "source": {"leg":"mic","artifact":"mic.wav","samples":AUDIO_FRAMES,"sha256":mic_ref.sha256},
+            "metrics": {"duration_s":8.0},
             "observations": {
                 "silence":{"status":"not_observed","detail":"synthetic"},
                 "clipping":{"status":"not_observed","detail":"synthetic"},
@@ -221,7 +223,8 @@ fn seed(root: &Path, repository: PathBuf) -> Result<(), FixtureError> {
         "content": "deterministic invented review fixture",
         "meeting_id": MEETING_ID,
         "retry_operation_id": OPERATION_ID,
-        "note": "No generated note is seeded: note semantics are worker-owned and the reader requires a projector for Ready notes."
+        "covered_states": ["retained meeting", "verified audio", "quality and device projections", "pending transcript retry"],
+        "note": "No generated note is seeded; this fixture remains TranscriptReady and does not invoke a note worker."
     });
     write_new(
         &storage.path().join("SYNTHETIC_FIXTURE.json"),
@@ -314,7 +317,7 @@ fn transcript_bytes(turns: &[(&str, &str)]) -> Vec<u8> {
     .expect("synthetic transcript is serializable")
 }
 
-fn wav(frequency: u32, frames: usize) -> Vec<u8> {
+fn wav(frames: usize) -> Vec<u8> {
     let data_len = (frames * 2) as u32;
     let mut bytes = Vec::with_capacity(44 + data_len as usize);
     bytes.extend_from_slice(b"RIFF");
@@ -329,9 +332,8 @@ fn wav(frequency: u32, frames: usize) -> Vec<u8> {
     bytes.extend_from_slice(&16_u16.to_le_bytes());
     bytes.extend_from_slice(b"data");
     bytes.extend_from_slice(&data_len.to_le_bytes());
-    for index in 0..frames {
-        let sample = (((index as u32 * frequency) % 2_000) as i16) - 1_000;
-        bytes.extend_from_slice(&sample.to_le_bytes());
+    for _ in 0..frames {
+        bytes.extend_from_slice(&0_i16.to_le_bytes());
     }
     bytes
 }
@@ -374,6 +376,7 @@ mod tests {
         let meeting = load_meeting(&meeting_dir).unwrap();
         verify_record_artifacts(&meeting_dir, &meeting).unwrap();
         assert_eq!(meeting.lifecycle, MeetingLifecycle::TranscriptReady);
+        assert!(Uuid::parse_str(MEETING_ID).is_ok());
         let source = meeting.artifacts.current_transcript.clone().unwrap();
         let quality = project_capture_quality(&meeting_dir, &meeting).unwrap();
         assert_eq!(quality.state, CaptureQualityState::Available);
@@ -385,6 +388,8 @@ mod tests {
         );
         verify_artifact_ref(&meeting_dir, &meeting.artifacts.microphone_audio.unwrap()).unwrap();
         verify_artifact_ref(&meeting_dir, &meeting.artifacts.system_audio.unwrap()).unwrap();
+        assert_silent_wav(&fs::read(meeting_dir.join("capture/mic.wav")).unwrap());
+        assert_silent_wav(&fs::read(meeting_dir.join("capture/system.wav")).unwrap());
 
         let coordination = MeetingStorageCoordination::default();
         let authority = TranscriptRetryAuthority::new(&storage, &coordination);
@@ -415,6 +420,23 @@ mod tests {
         let marker = fs::read_to_string(root.join("SYNTHETIC_FIXTURE.json")).unwrap();
         assert!(marker.contains("private_data"));
         assert!(marker.contains("product_evidence"));
+    }
+
+    fn assert_silent_wav(bytes: &[u8]) {
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        assert_eq!(&bytes[12..16], b"fmt ");
+        assert_eq!(
+            u32::from_le_bytes(bytes[24..28].try_into().unwrap()),
+            AUDIO_SAMPLE_RATE
+        );
+        assert_eq!(u16::from_le_bytes(bytes[22..24].try_into().unwrap()), 1);
+        assert_eq!(u16::from_le_bytes(bytes[34..36].try_into().unwrap()), 16);
+        assert_eq!(&bytes[36..40], b"data");
+        let data_bytes = u32::from_le_bytes(bytes[40..44].try_into().unwrap()) as usize;
+        assert_eq!(data_bytes, AUDIO_FRAMES * 2);
+        assert_eq!(bytes.len(), 44 + data_bytes);
+        assert!(bytes[44..].iter().all(|sample| *sample == 0));
     }
 
     fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
