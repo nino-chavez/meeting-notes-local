@@ -358,17 +358,34 @@ retention pass without touching storage. A second focused review reported zero
 material findings in that scope. Those reviews inspected source and assertions;
 the executable test evidence above comes from the build session.
 
-**Rendered review boundary.** Computer-use targeted the exact Preview bundle,
-but the Mac was locked and automatic unlock failed. The retry comparison,
-quality and device messages, retained-audio controls, recovery actions,
-decide-later close, keep, promote, and post-promotion note state have not been
-observed in the rendered app. They remain a release gate. No real meeting audio
-was played to manufacture a passing check.
+**Rendered Preview receipt — 2026-08-17.** The first running Preview process
+predated the rebuilt bundle, so it was not accepted as release evidence. After
+confirming that it had no capture artifact open, Computer Use closed it and
+launched the exact packaged `Yawn Preview.app` by its full path. The fresh
+process completed its local-engine check and rendered the transcript-ready
+state.
 
-**Remaining release gate.** The production 0.5.8 bundle has not been signed,
-installed, or substituted for `/Applications/Yawn.app`. The next release must
-start from a clean source tree and repeat the completed-meeting journey against
-that exact installed package before these changes can be called shipped.
+The live walk observed Recent meetings, title search, reopening a retained
+meeting from Meetings, **Generate note**, progressive **Full transcript**
+disclosure, separate **Play microphone** and **Play system audio** controls,
+the separate personal-notes area, and **Back to meetings** continuity. Settings
+rendered on-device storage, speech and note model controls, and separate
+microphone and system-audio access controls. The walk returned to Meetings
+without changing any setting.
+
+The retry comparison, quality and device messages, playback state and Stop,
+recovery actions, speaker-correction save and regeneration, decide-later close,
+keep, promote, and post-promotion note state still lack rendered evidence. No
+real meeting audio was played, no private content was reproduced, no field was
+edited, and no permission was accepted to manufacture a passing check.
+
+**Remaining release gate.** The base completed-meeting reopen and Back journey
+now passes in the separately identified Preview package. The production 0.5.8
+bundle has not been signed, installed, or substituted for
+`/Applications/Yawn.app`. The remaining stateful journeys above require a
+disposable fixture or explicit human review, followed by the same walk against
+the exact installed production package, before these changes can be called
+shipped.
 
 **Remaining slice 1b gate.** Source acceptance is complete: note generation uses
 the corrected attribution while source links stay bound to the retained
