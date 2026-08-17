@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 
 use local_meeting_notes_session_core::corpus_index::CorpusIndex;
 use local_meeting_notes_session_core::library_read::FolderFilter;
@@ -14,8 +16,8 @@ use local_meeting_notes_session_core::library_read::{
     OpenedLibraryHit, ReadLimits,
 };
 use local_meeting_notes_session_core::meeting::{
-    ArtifactRef, AudioRetentionRule, AudioState, MeetingLifecycle, load_meeting, resolve_artifact,
-    verify_record_artifacts, verify_record_static_artifacts,
+    ArtifactRef, AudioRetentionRule, AudioState, MeetingLifecycle, load_meeting, open_private_file,
+    resolve_artifact, verify_record_artifacts, verify_record_static_artifacts,
 };
 use local_meeting_notes_session_core::meeting_title;
 use local_meeting_notes_session_core::note_projection::{ClaimType, NoteProjector, UnavailableProjector};
@@ -23,6 +25,7 @@ use local_meeting_notes_session_core::retention::meeting_dir;
 use local_meeting_notes_session_core::storage::StorageRoot;
 use local_meeting_notes_session_core::transcript_deletion::transcript_deletion_completed;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 const STALE_MESSAGE: &str = "That view is no longer current. Reopen it and try again.";
@@ -55,6 +58,7 @@ pub(crate) struct LibraryReader {
     handles: HashMap<String, LibraryHit>,
     operator_note_handles: HashMap<String, LibraryHit>,
     audio_deletion_handles: HashMap<String, LibraryHit>,
+    audio_playback_handles: HashMap<String, RetainedAudioPlaybackHandle>,
     transcript_deletion_handles: HashMap<String, LibraryHit>,
     meeting_deletion_handles: HashMap<String, LibraryHit>,
 }
@@ -267,6 +271,53 @@ pub(crate) struct LibraryAudioDeletionAccess {
     pub(crate) message: String,
 }
 
+/// The only two retained-audio sources a player may ever request. This is a
+/// closed native enum rather than a string so a future player cannot turn a
+/// source choice into arbitrary storage authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetainedAudioSource {
+    Microphone,
+    System,
+}
+
+#[derive(Debug, Clone)]
+struct RetainedAudioPlaybackHandle {
+    hit: LibraryHit,
+    source: RetainedAudioSource,
+    /// The exact artifact the reviewed detail view verified. Authorization
+    /// rejects a record that was changed to point elsewhere before playback.
+    artifact: ArtifactRef,
+}
+
+/// A consumed, native-only grant for one verified retained-audio file.
+///
+/// This intentionally has no serialization implementation and exposes neither
+/// a path, a digest, nor a meeting identity. A fixed native player can read the
+/// already-open private file without widening the webview's authority.
+#[derive(Debug)]
+pub(crate) struct LibraryAudioPlaybackGrant {
+    source: RetainedAudioSource,
+    file: File,
+}
+
+impl LibraryAudioPlaybackGrant {
+    pub(crate) fn source(&self) -> RetainedAudioSource {
+        self.source
+    }
+
+    pub(crate) fn file(&self) -> &File {
+        &self.file
+    }
+}
+
+/// Native-only failure information for playback authorization. It carries no
+/// artifact identity because callers must never reflect one to the webview.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct LibraryAudioPlaybackAccess {
+    pub(crate) state: &'static str,
+    pub(crate) message: String,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct LibraryTranscriptDeletionAccess {
     pub(crate) state: &'static str,
@@ -383,6 +434,7 @@ impl LibraryReader {
             handles: HashMap::new(),
             operator_note_handles: HashMap::new(),
             audio_deletion_handles: HashMap::new(),
+            audio_playback_handles: HashMap::new(),
             transcript_deletion_handles: HashMap::new(),
             meeting_deletion_handles: HashMap::new(),
         }
@@ -1124,6 +1176,100 @@ impl LibraryReader {
         Some(handle)
     }
 
+    /// Mints one native-only capability for the requested retained recording
+    /// leg. The caller must already have the current active-meeting snapshot;
+    /// this method rechecks it and the exact on-disk artifact before retaining
+    /// anything. It never returns an artifact identity to a webview surface.
+    pub(crate) fn retain_audio_playback_handle(
+        &mut self,
+        meeting_id: &str,
+        source: RetainedAudioSource,
+        active_meeting_ids: &HashSet<String>,
+    ) -> Option<String> {
+        if !self.revalidate(active_meeting_ids) || active_meeting_ids.contains(meeting_id) {
+            return None;
+        }
+        let hit = self.projection.meeting_handle(meeting_id).ok()?;
+        let artifact = Self::retained_audio_artifact(&self.storage, meeting_id, source)?;
+        let handle = Uuid::new_v4().to_string();
+        self.audio_playback_handles.insert(
+            handle.clone(),
+            RetainedAudioPlaybackHandle {
+                hit,
+                source,
+                artifact,
+            },
+        );
+        Some(handle)
+    }
+
+    /// Consumes an opaque source-specific playback handle and returns only an
+    /// already-open, digest-verified native file grant. A fixed player can use
+    /// that file; no generic file path or filesystem capability escapes here.
+    pub(crate) fn authorize_audio_playback(
+        &mut self,
+        handle: &str,
+        active_meeting_ids: &HashSet<String>,
+    ) -> Result<LibraryAudioPlaybackGrant, LibraryAudioPlaybackAccess> {
+        if !self.revalidate(active_meeting_ids) {
+            return Err(Self::stale_audio_playback());
+        }
+        let playback = self.audio_playback_handles.get(handle).cloned();
+        // Playback handles are single-use and belong to this exact projection
+        // generation, just like deletion handles. Clear even on a bad handle.
+        self.clear_handles();
+        let Some(playback) = playback else {
+            return Err(Self::stale_audio_playback());
+        };
+        let meeting_id = match self.projection.open_snapshot(&playback.hit) {
+            Ok(OpenedLibraryHit::Meeting { meeting_id, .. }) => meeting_id,
+            Ok(_) | Err(_) => return Err(Self::stale_audio_playback()),
+        };
+        if active_meeting_ids.contains(&meeting_id) {
+            return Err(Self::stale_audio_playback());
+        }
+        let Some(current) =
+            Self::retained_audio_artifact(&self.storage, &meeting_id, playback.source)
+        else {
+            return Err(Self::unavailable_audio_playback());
+        };
+        // A new meeting record may be valid on its own but is not the artifact
+        // this handle was issued for. Require exact continuity across the
+        // review-to-playback boundary.
+        if current != playback.artifact {
+            return Err(Self::stale_audio_playback());
+        }
+        let Ok(directory) = meeting_dir(&self.storage, &meeting_id) else {
+            return Err(Self::unavailable_audio_playback());
+        };
+        let Ok(path) = resolve_artifact(&directory, &current.relative_path) else {
+            return Err(Self::unavailable_audio_playback());
+        };
+        let Ok(mut file) = open_private_file(&path) else {
+            return Err(Self::unavailable_audio_playback());
+        };
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let Ok(read) = file.read(&mut buffer) else {
+                return Err(Self::unavailable_audio_playback());
+            };
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        if format!("{:x}", hasher.finalize()) != current.sha256
+            || file.seek(SeekFrom::Start(0)).is_err()
+        {
+            return Err(Self::unavailable_audio_playback());
+        }
+        Ok(LibraryAudioPlaybackGrant {
+            source: playback.source,
+            file,
+        })
+    }
+
     fn retain_transcript_deletion_handle(&mut self, meeting_id: &str) -> Option<String> {
         if !self.meeting_has_transcript(meeting_id) {
             return None;
@@ -1281,6 +1427,7 @@ impl LibraryReader {
     fn clear_non_note_handles(&mut self) {
         self.handles.clear();
         self.audio_deletion_handles.clear();
+        self.audio_playback_handles.clear();
         self.transcript_deletion_handles.clear();
         self.meeting_deletion_handles.clear();
     }
@@ -1334,6 +1481,28 @@ impl LibraryReader {
 
     fn audio_retention(&self, meeting_id: &str) -> LibraryAudioRetention {
         Self::read_audio_retention(&self.storage, meeting_id)
+    }
+
+    /// Opens the current meeting record and proves that the requested source
+    /// is still retained, regular, non-symlinked, and digest-valid. The core
+    /// verifier covers the full record; the returned ref identifies just the
+    /// selected audio leg for source-specific handles.
+    fn retained_audio_artifact(
+        storage: &StorageRoot,
+        meeting_id: &str,
+        source: RetainedAudioSource,
+    ) -> Option<ArtifactRef> {
+        let directory = meeting_dir(storage, meeting_id).ok()?;
+        let meeting = load_meeting(&directory).ok()?;
+        if meeting.retention.state != AudioState::Retained
+            || verify_record_artifacts(&directory, &meeting).is_err()
+        {
+            return None;
+        }
+        match source {
+            RetainedAudioSource::Microphone => meeting.artifacts.microphone_audio.clone(),
+            RetainedAudioSource::System => meeting.artifacts.system_audio.clone(),
+        }
     }
 
     /// Read alongside the retention facts, from the same resolved directory and
@@ -1535,6 +1704,20 @@ impl LibraryReader {
             state: "stale",
             meeting_id: None,
             message: STALE_MESSAGE.into(),
+        }
+    }
+
+    fn stale_audio_playback() -> LibraryAudioPlaybackAccess {
+        LibraryAudioPlaybackAccess {
+            state: "stale",
+            message: STALE_MESSAGE.into(),
+        }
+    }
+
+    fn unavailable_audio_playback() -> LibraryAudioPlaybackAccess {
+        LibraryAudioPlaybackAccess {
+            state: "unavailable",
+            message: "Retained audio is unavailable. Reopen Library and try again.".into(),
         }
     }
 
@@ -2305,5 +2488,86 @@ mod tests {
             assert_eq!(retention.state, "unavailable", "{mutation}");
             assert_eq!(retention.retained_bytes, None, "{mutation}");
         }
+    }
+
+    #[test]
+    fn retained_audio_playback_grant_is_source_scoped_and_single_use() {
+        let microphone = b"microphone recording";
+        let fixture = fixture(
+            AudioState::Retained,
+            AudioRetentionRule::UntilManualDeletion,
+            microphone,
+            b"system recording",
+        );
+        let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(fixture.storage, projection);
+
+        let handle = reader
+            .retain_audio_playback_handle(
+                MEETING_ID,
+                RetainedAudioSource::Microphone,
+                &HashSet::new(),
+            )
+            .expect("verified retained microphone gets a native handle");
+        let grant = reader
+            .authorize_audio_playback(&handle, &HashSet::new())
+            .expect("current verified artifact grants playback");
+        assert_eq!(grant.source(), RetainedAudioSource::Microphone);
+        let mut file = grant.file();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, microphone);
+
+        assert_eq!(
+            reader
+                .authorize_audio_playback(&handle, &HashSet::new())
+                .unwrap_err()
+                .state,
+            "stale"
+        );
+    }
+
+    #[test]
+    fn retained_audio_playback_rejects_released_and_changed_artifacts() {
+        let released = fixture(
+            AudioState::Released,
+            AudioRetentionRule::UntilManualDeletion,
+            b"microphone",
+            b"system",
+        );
+        let projection = LibraryProjection::rebuild(&released.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(released.storage, projection);
+        assert_eq!(
+            reader.retain_audio_playback_handle(
+                MEETING_ID,
+                RetainedAudioSource::Microphone,
+                &HashSet::new(),
+            ),
+            None
+        );
+
+        let fixture = fixture(
+            AudioState::Retained,
+            AudioRetentionRule::UntilManualDeletion,
+            b"microphone",
+            b"system",
+        );
+        let projection = LibraryProjection::rebuild(&fixture.storage, Default::default()).unwrap();
+        let mut reader = LibraryReader::new(fixture.storage.clone(), projection);
+        let handle = reader
+            .retain_audio_playback_handle(
+                MEETING_ID,
+                RetainedAudioSource::Microphone,
+                &HashSet::new(),
+            )
+            .unwrap();
+        fs::write(fixture.directory.join("capture/mic.wav"), b"changed").unwrap();
+        assert_eq!(
+            reader
+                .authorize_audio_playback(&handle, &HashSet::new())
+                .unwrap_err()
+                .state,
+            "stale"
+        );
     }
 }
