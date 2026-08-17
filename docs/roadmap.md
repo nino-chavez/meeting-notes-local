@@ -12,10 +12,11 @@ into broader meeting intelligence.
 
 Local vocabulary is now visible and editable in meeting review, and its exact
 replacements reach future generated notes without changing the retained
-transcript. Recording-quality evidence and a source-bound transcription retry
-foundation are built. The next slice is the desktop comparison and explicit
-keep-or-promote journey. Cross-meeting questions can follow once the source
-record is reliable.
+transcript. Recording-quality evidence and the source-bound transcription retry
+journey are now built in Preview. A reader can compare the current transcript
+with a separate retry, keep the current version, or promote the retry without
+silently regenerating the note. Live rendered verification remains open.
+Cross-meeting questions can follow once the source record is reliable.
 Cloud accounts, automatic call detection, meeting bots, and live meeting chat do
 not enter the roadmap through competitor comparison alone.
 
@@ -81,8 +82,8 @@ The summary-first note is the baseline. It is not another roadmap item.
 | 1a | The reader can see who said what | Implemented in source and preview | Render the attribution already carried by each transcript turn |
 | 1b | The reader can correct who said what | Implemented, tested, and packaged in Preview; rendered save-and-regenerate journey pending | Never hide uncertainty or overwrite the source transcript |
 | 2 | Names and jargon stay correct across meetings | Review controls, bounded storage, and provenance-safe note application are implemented, tested, and packaged in Preview | Vocabulary remains local, visible, editable, and bounded |
-| 3 | The reader can tell whether the audio caused a bad transcript | New captures persist separate quality evidence and microphone identity; retry worker and durable candidate core built; review UI queued | Quality evidence stays distinct from capture-integrity evidence |
-| 4 | Every recoverable problem leads to its exact repair | Note retry, Meetings, withheld-turn restoration, and vocabulary destinations are real; transcript-retry UI queued | Recovery actions must not imply that a failed operation succeeded |
+| 3 | The reader can tell whether the audio caused a bad transcript | Verified quality guidance and a source-bound retry comparison are implemented, tested, and packaged in Preview; retained-audio playback, device explanation, and rendered verification remain | Quality evidence stays distinct from capture-integrity evidence |
+| 4 | Every recoverable problem leads to its exact repair | Note retry, Meetings, withheld-turn restoration, vocabulary, and transcript retry are real destinations; the remaining warning map is incomplete | Recovery actions must not imply that a failed operation succeeded |
 | 5 | The reader can find source passages across past meetings | Separate product decision | Search remains local, source-linked, and unavailable during capture |
 
 ## Delivery plan
@@ -131,24 +132,31 @@ reopen the same meeting. The installed production app remains untouched.
 | Packet | Delivered foundation | Remaining product work |
 |---|---|---|
 | Vocabulary projection | Exact replacements travel as bounded original-source ranges. Changed-length prompt text maps evidence back to the retained transcript. The current store is re-attested before durable note replacement. | Dedicated controls and current-meeting application counts are now built. **Always correct this** remains a later shortcut into the same ledger. |
-| Recording-quality evidence | New capture receipts persist resolved microphone identity and a separate `capture-quality/1` block for silence, clipping, low input, and steady background energy. Legacy receipts report quality as unknown. | Expose the evidence in review, add retained-audio playback, and build versioned transcription retry. |
+| Recording-quality evidence | New capture receipts persist resolved microphone identity and a separate `capture-quality/1` block for silence, clipping, low input, and steady background energy. Legacy receipts report quality as unknown. | Reader-safe review guidance and versioned retry are now built. Retained-audio playback and device explanation remain. |
 | Withheld-turn recovery | A valid withheld row now exposes one source-bound restore action. The command, capability, build contract, and shell contract are synchronized. | Add the remaining exact destinations only after their owning controls exist. |
 
-### Wave 2 integration — in progress
+### Wave 2 integration — built, rendered gate pending
 
 1. **Built and packaged in Preview:** expose local vocabulary through a small
    dedicated sheet. Keep every entry visible, editable, disableable, and local.
 2. **Built and packaged in Preview:** show current-meeting application counts
    through the same immutable projection already used by note generation.
-3. **Foundation built:** create a retry only from reverified retained audio and
-   the current transcript. Store the candidate separately. Never replace the
-   active transcript during retry creation.
-4. **Next:** surface recording-quality evidence, compare the current and retry
-   transcripts, and require an explicit keep-or-promote choice.
+3. **Built and packaged in Preview:** create a retry only from reverified
+   retained audio and the current transcript. Store the candidate separately.
+   Never replace the active transcript during retry creation.
+4. **Built and packaged in Preview:** surface reader-safe recording-quality
+   guidance, compare the current and retry transcripts, and require an explicit
+   keep-or-promote choice. Promotion clears the stale note pointer but does not
+   regenerate a note automatically.
 5. Complete the exact-repair map only after every destination exists. A button
    that opens a placeholder does not count as recovery.
 
-### Wave 3 — make the separate product decision
+The remaining product work in this outcome is narrower: retained-audio
+playback, a safe explanation of the recorded device, and the warnings whose
+destinations do not exist yet. Those gaps do not weaken the retry contract, but
+they keep roadmap outcomes 3 and 4 open.
+
+### Wave 3 decision — not started
 
 Test a narrow, local source finder against real review tasks. Do not build a
 general meeting assistant by default. Proceed only if quoted passages, coverage
@@ -255,8 +263,7 @@ artifacts before and after creating an immutable candidate. Session-core checks
 the same five-part binding under the meeting lease, stores the candidate beside
 the source, and leaves the active transcript and note unchanged. A later
 explicit promotion changes the transcript pointer and clears the stale note
-pointer while preserving all prior files. The desktop command and comparison
-journey are not built yet, so transcription retry is not user-visible.
+pointer while preserving all prior files.
 
 The merged session-core suite passed 441 unit tests, 17 process-fault tests, and
 8 doc tests. The desktop suite passed 133 tests, the shell contract passed 5,
@@ -266,6 +273,46 @@ and Python suites ran concurrently; it passed alone in 191 seconds, and the
 full worker suite then passed alone in 188 seconds. The internal worker runtime
 rebuilt and verified. `Yawn Preview.app` rebuilt and passed bundle verification.
 The installed production app remains unchanged.
+
+**Wave 2 product-integration receipt.** Meeting review now exposes the retry as
+a separate action after the generated note and before the full transcript. The
+comparison sheet shows the current and candidate transcripts side by side on a
+wide window and stacked on a narrow one. Withheld rows remain withheld. It also
+shows a closed set of product-authored recording-quality observations; raw
+metrics, device names, paths, audio digests, and receipt text do not cross into
+the web view.
+
+Retry creation is bound to the current transcript, capture session,
+microphone audio, and system audio. The worker rereads and hashes all retained
+sources before and after transcription, then the desktop rereads the immutable
+candidate by its content address. Creation does not change the active
+transcript or note. Only **Use retry** changes the transcript pointer. That
+decision clears the stale note pointer, preserves every prior file, and leaves
+note regeneration as a separate reader action. **Keep current** records the
+decision without changing the meeting. Closing the sheet records nothing.
+
+Pending comparisons survive restart through the same session-core authority
+that owns retry decisions. Discovery is bounded and fails closed on multiple,
+stale, released, corrupt, cross-meeting, or malformed candidates. The desktop
+handler, capabilities, permission schemas, and shell contract expose the same
+three commands.
+
+The combined session-core suite passed 453 unit tests. Its 17 process-fault and
+8 doc tests were unchanged from the prior combined gate. The desktop suite
+passed 137 tests, the shell contract passed 5, the build matrix passed 5, and
+the UI suite passed 30. The worker suite passed 222 tests with 10 platform
+skips. The internal worker runtime rebuilt and verified. `Yawn Preview.app`
+rebuilt and passed bundle verification.
+
+An independent read-only adversarial review re-derived the source bindings,
+mutation boundaries, restart behavior, web-view projection, and command parity.
+It reported no material findings. That review inspected source and assertions;
+the executable test evidence above comes from the build session.
+
+**Rendered retry boundary.** Computer-use targeted the exact Preview bundle,
+but the Mac was locked and automatic unlock failed. The retry comparison,
+quality messages, decide-later close, keep, promote, and post-promotion note
+state have not been observed in the rendered app. They remain a release gate.
 
 **Remaining release gate.** The production 0.5.8 bundle has not been signed,
 installed, or substituted for `/Applications/Yawn.app`. The next release must
@@ -346,9 +393,8 @@ acronyms, and preferred spellings that matter in their meetings.
 - Removing an entry does not rewrite past source artifacts
 - Note regeneration uses the current corrected projection and preserves evidence
 
-**Product change required.** The product brief currently limits Settings to
-audio access and model storage. Vocabulary needs either a small dedicated sheet
-or an explicit amendment to that Settings boundary.
+**Boundary decision.** Vocabulary lives in a dedicated meeting-review sheet.
+It does not widen Settings beyond audio access and model storage.
 
 ## 3. Explain recording quality and allow a safe retry
 
@@ -356,9 +402,11 @@ or an explicit amendment to that Settings boundary.
 recording was silent, clipped, noisy, incomplete, or captured from the wrong
 microphone before blaming the speech or note model.
 
-**Existing foundation.** Capture already persists integrity evidence, and the
-recorder resolves the microphone device before capture. The current transcript
-projection reads but does not expose the stored `capture_health` object.
+**Current state.** Capture persists integrity evidence, resolved microphone
+identity, and a separate quality block. Meeting review exposes only verified,
+product-authored quality guidance. The retry comparison and explicit keep or
+promote decisions are built and packaged in Preview. Retained-audio playback,
+safe device explanation, and the rendered journey remain open.
 
 **Scope.**
 
@@ -396,6 +444,10 @@ Examples:
 This is an in-app routing contract, not an email campaign. A generic help page
 does not satisfy the outcome when Yawn already knows the failing meeting and
 operation.
+
+**Current state.** Note retry, Meetings, withheld-turn restoration, local
+vocabulary, speaker correction, and transcript retry have real destinations.
+The remaining warning inventory has not yet been closed against that map.
 
 **Done when.** Every recoverable warning has one primary action, lands at the
 correct meeting or control, and preserves the failed artifact until the repair
