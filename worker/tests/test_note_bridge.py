@@ -1035,6 +1035,15 @@ for request, ids in batches():
     answer(verdicts(ids, lambda index: "ABSTAIN"))
 """
 
+STUB_REQUIRES_CORRECTED_LABEL = STUB_PREAMBLE + """
+for index, (request, ids) in enumerate(batches()):
+    if '"speaker":"Alex"' not in request["user"] or '"speaker":"Them"' in request["user"]:
+        Path(MARKER).write_text("wrong-label")
+    else:
+        Path(MARKER).write_text("corrected-label")
+    answer(verdicts(ids, lambda position: "KEEP" if index % 20 == 0 else "ABSTAIN"))
+"""
+
 
 MODEL_FILES = {"config.json": b"{}\n", "weights.npz": b"weights\n"}
 
@@ -1074,16 +1083,18 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.candidates = self._write_long_transcript(self.TRANSCRIPT_TURNS)
         self.assertGreater(self.candidates, 64, "fixture must span batches and the keep budget")
 
-    def _write_long_transcript(self, turns: int) -> int:
+    def _write_long_transcript(self, turns: int, *, speaker: str | None = None) -> int:
         """Replace the meeting's transcript with one that spans several batches."""
         sys.path.insert(0, str(REPO / "notes"))
+        sys.path.insert(0, str(REPO / "spike"))
         from summarize import build_fragment_map
         from transcript import load_bytes
+        from capture_health import build as build_capture_health
 
         document = {
-            "schema": "file-transcript/1",
+            "schema": "capture-transcript/1" if speaker else "file-transcript/1",
             "source": "synthetic generate-path control; not product evidence",
-            "attribution": "none",
+            "attribution": "channel" if speaker else "none",
             "turns": [
                 {
                     # Multi-byte, and early enough in the turn that a locator
@@ -1097,10 +1108,25 @@ class NoteGenerateBridgeTests(unittest.TestCase):
                         "the packaging option."
                     ),
                     "start": float(index + 1),
+                    **({"speaker": speaker} if speaker else {}),
                 }
                 for index in range(turns)
             ],
         }
+        if speaker:
+            document.update({
+                "bleed": None,
+                "voiceprint": None,
+                "capture_health": build_capture_health(
+                    mic_samples=16_000,
+                    system_samples=16_000,
+                    capture_elapsed_samples=16_000,
+                    dropouts={"mic": [], "system": []},
+                    tap_errors=[],
+                    transcription_requested=True,
+                    transcript_written=True,
+                ),
+            })
         # The coverage this fixture buys is invisible if it ever goes ASCII, so
         # it is asserted rather than trusted. Measured: with ASCII-only turns,
         # rewriting `validate_locators` to byte offsets left all 51 tests
@@ -1185,13 +1211,15 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self._harness._write_manifest(document)
 
     def _generate_command(self, **overrides) -> tuple[str, bytes]:
+        speaker_label_overrides = overrides.pop("speaker_label_overrides", None)
         request_id = str(uuid.uuid4())
         arguments = {
             "meeting_id": self.meeting_id,
             "transcript_id": self.transcript_id,
-            "model_directory": self.MODEL_DIRECTORY,
-            "deadline_s": 20,
         }
+        if speaker_label_overrides is not None:
+            arguments["speaker_label_overrides"] = speaker_label_overrides
+        arguments.update({"model_directory": self.MODEL_DIRECTORY, "deadline_s": 20})
         arguments.update(overrides)
         command = {
             "schema": "note-bridge-command/1",
@@ -1323,6 +1351,29 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         # Nothing under the private root moved: no note, no markdown, no receipt.
         self.assertEqual(self._tree(), before)
         self.assertTrue(self.marker.exists())
+
+    def test_generate_applies_the_bounded_overlay_without_changing_locator_source(self) -> None:
+        self._write_long_transcript(self.TRANSCRIPT_TURNS, speaker="Them")
+        self._write_generator(STUB_REQUIRES_CORRECTED_LABEL)
+        self._write_generate_manifest()
+
+        result, returncode, error, _ = self._run(
+            speaker_label_overrides=[
+                {"source_speaker": "Them", "replacement": "Alex"}
+            ]
+        )
+
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "generated")
+        self.assertEqual(self.marker.read_text(), "corrected-label")
+        self.assertEqual(result["generation"]["transcript_sha256"], self.transcript_id)
+        turns = self._transcript_turns()
+        for claim in result["generation"]["claims"]:
+            for locator in claim["locators"]:
+                text = turns[locator["turn"]]["text"][locator["start"]:locator["end"]]
+                self.assertEqual(
+                    hashlib.sha256(text.encode()).hexdigest(), locator["text_sha256"]
+                )
 
     def test_generated_locators_resolve_to_the_transcripts_own_bytes(self) -> None:
         result, _, _, _ = self._run()

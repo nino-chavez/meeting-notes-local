@@ -1190,6 +1190,26 @@ class ProductOperationContractTests(unittest.TestCase):
                 with self.assertRaises(ProductContractRefused):
                     validate_note_create_error(changed)
 
+    def test_note_create_overlay_is_exact_and_bounded(self) -> None:
+        arguments = dict(self.fixture["accepted_note"]["worker_arguments"])
+        arguments["speaker_label_overrides"] = [
+            {"source_speaker": "Them", "replacement": "Alex"}
+        ]
+        validate_note_create_arguments(arguments)
+
+        for override in (
+            [{"source_speaker": "Other", "replacement": "Alex"}],
+            [{"source_speaker": "Them", "replacement": " Alex "}],
+            [
+                {"source_speaker": "Them", "replacement": "Alex"},
+                {"source_speaker": "Me", "replacement": "Nino"},
+            ],
+        ):
+            changed = dict(arguments)
+            changed["speaker_label_overrides"] = override
+            with self.subTest(override=override), self.assertRaises(ProductContractRefused):
+                validate_note_create_arguments(changed)
+
 
 class ProductArtifactAdapterTests(unittest.TestCase):
     def setUp(self) -> None:

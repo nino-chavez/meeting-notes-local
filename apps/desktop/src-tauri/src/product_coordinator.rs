@@ -41,11 +41,11 @@ use local_meeting_notes_session_core::operations::{
     NoteCreateWorkerArgs, NoteCreateWorkerFailure, NoteCreateWorkerFailureCode,
     TranscriptRestoreWorkerArgs,
 };
-use local_meeting_notes_session_core::runtime::RuntimeManifest;
 use local_meeting_notes_session_core::protocol::{
     Operation, ProtocolError, WorkerCommand, WorkerProgress, WorkerResult,
 };
 use local_meeting_notes_session_core::retention::AppDataWriterLock;
+use local_meeting_notes_session_core::runtime::RuntimeManifest;
 use local_meeting_notes_session_core::storage::StorageRoot;
 use local_meeting_notes_session_core::supervision::OwnedChild;
 use local_meeting_notes_session_core::transcript_restoration::{
@@ -211,6 +211,7 @@ impl NoteGenerationWorker for WorkerProcessNoteGenerationBridge {
             request_id: Uuid::new_v4(),
             meeting_id: arguments.meeting_id.to_string(),
             transcript_sha256: arguments.source_transcript_sha256.clone(),
+            speaker_label_overrides: arguments.speaker_label_overrides.clone(),
         };
         let frame = generator
             .generate(&request)
@@ -406,7 +407,26 @@ impl ProductOperationCoordinator for DesktopProductCoordinator {
         args: &local_meeting_notes_session_core::operations::RegenerateNoteUiArgs,
     ) -> Result<Uuid, CoordinatorError> {
         self.generation_coordinator()?
-            .regenerate_note(args)
+            // The Tauri command derives this overlay from the local correction
+            // sidecar. Re-derive it under the core coordinator's meeting lease
+            // so a stale, malformed, or caller-supplied value cannot replace
+            // the current note.
+            .regenerate_note_with(args, |meeting_dir| {
+                let current_overrides = crate::speaker_correction::current_label_overrides(
+                    meeting_dir,
+                    args.meeting_id,
+                    &args.source_transcript_sha256,
+                )
+                .map_err(|_| {
+                    NoteGenerationCoordinatorError::Ambiguous("speaker corrections are invalid")
+                })?;
+                if current_overrides != args.speaker_label_overrides {
+                    return Err(NoteGenerationCoordinatorError::Ambiguous(
+                        "speaker corrections changed",
+                    ));
+                }
+                Ok(())
+            })
             .map_err(|error| match error {
                 NoteGenerationCoordinatorError::Worker(NoteGenerationWorkerError::Unavailable)
                 | NoteGenerationCoordinatorError::StorageUnavailable => {
@@ -424,7 +444,7 @@ mod tests {
     use local_meeting_notes_session_core::meeting::AudioState;
     use local_meeting_notes_session_core::meeting::MeetingLifecycle;
     use local_meeting_notes_session_core::operations::{
-        RegenerateNoteUiArgs, RestoreWithheldTurnUiArgs,
+        RegenerateNoteUiArgs, RestoreWithheldTurnUiArgs, SpeakerLabelOverride,
     };
     use local_meeting_notes_session_core::protocol::ResultSchema;
     use serde_json::json;
@@ -570,6 +590,7 @@ mod tests {
             coordinator.accept_regeneration(&RegenerateNoteUiArgs {
                 meeting_id: Uuid::new_v4(),
                 source_transcript_sha256: "f".repeat(64),
+                speaker_label_overrides: Vec::new(),
             }),
             Err(CoordinatorError::Unavailable)
         );
@@ -722,8 +743,58 @@ mod tests {
             coordinator.accept_regeneration(&RegenerateNoteUiArgs {
                 meeting_id: fixture.meeting_id,
                 source_transcript_sha256: fixture.transcript_sha256.clone(),
+                speaker_label_overrides: Vec::new(),
             }),
             Err(CoordinatorError::Unavailable)
+        );
+        assert!(port.requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn regeneration_refuses_an_overlay_that_the_current_sidecar_does_not_attest() {
+        let fixture = runtime_fixture(gated_turns());
+        let port = Arc::new(FakePort::new(FakeOutcome::Accept(HashMap::new())));
+        let coordinator = coordinator_for(&fixture, port.clone());
+
+        assert_eq!(
+            coordinator.accept_regeneration(&RegenerateNoteUiArgs {
+                meeting_id: fixture.meeting_id,
+                source_transcript_sha256: fixture.transcript_sha256.clone(),
+                speaker_label_overrides: vec![SpeakerLabelOverride {
+                    source_speaker: Some("Them".into()),
+                    replacement: "Alex".into(),
+                }],
+            }),
+            Err(CoordinatorError::Refused)
+        );
+        assert!(port.requests.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn regeneration_refuses_a_malformed_correction_sidecar_before_worker_work() {
+        let fixture = runtime_fixture(gated_turns());
+        let meeting_dir = fixture
+            .state
+            .storage
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .storage
+            .resolve(&Path::new("meetings").join(fixture.meeting_id.to_string()))
+            .unwrap();
+        std::fs::write(meeting_dir.join("speaker-corrections.json"), b"{not corrections")
+            .unwrap();
+        let port = Arc::new(FakePort::new(FakeOutcome::Accept(HashMap::new())));
+        let coordinator = coordinator_for(&fixture, port.clone());
+
+        assert_eq!(
+            coordinator.accept_regeneration(&RegenerateNoteUiArgs {
+                meeting_id: fixture.meeting_id,
+                source_transcript_sha256: fixture.transcript_sha256.clone(),
+                speaker_label_overrides: Vec::new(),
+            }),
+            Err(CoordinatorError::Refused)
         );
         assert!(port.requests.lock().unwrap().is_empty());
     }

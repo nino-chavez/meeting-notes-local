@@ -5230,6 +5230,34 @@ fn correct_speaker_name_for(
     })
 }
 
+/// Derive the note-generation overlay from the same digest-bound correction
+/// sidecar that supplies the transcript screen. A malformed or stale sidecar
+/// has no fallback: the existing note remains current until a later request
+/// can pass this check.
+pub(crate) fn speaker_label_overrides_for(
+    meeting_id: Uuid,
+    source_transcript_sha256: &str,
+    state: &ApplicationState,
+) -> Result<Vec<local_meeting_notes_session_core::operations::SpeakerLabelOverride>, String> {
+    let storage = preview_storage_clone(state).map_err(|_| {
+        "Local meeting storage is unavailable. Reopen the app and try again.".to_string()
+    })?;
+    let directory = meeting_dir(&storage, &meeting_id.to_string()).map_err(error_text)?;
+    let meeting = load_meeting(&directory).map_err(error_text)?;
+    let current = meeting
+        .artifacts
+        .current_transcript
+        .as_ref()
+        .ok_or_else(|| "This meeting no longer has a retained transcript.".to_string())?;
+    if current.sha256 != source_transcript_sha256 {
+        return Err("The transcript changed. Refresh the meeting and try again.".into());
+    }
+    speaker_correction::current_label_overrides(&directory, meeting_id, source_transcript_sha256)
+        .map_err(|_| {
+            "Saved speaker corrections could not be read, so the note was not replaced.".into()
+        })
+}
+
 fn main() {
     let state = ApplicationState::default();
     // Managed now so registering the facade commands later is one move; the

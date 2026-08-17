@@ -166,6 +166,28 @@ class Transcript:
                 lines.append(f"{t.speaker}: {t.text}")
         return "\n".join(lines)
 
+    def with_speaker_label_overrides(self, overrides: list[dict]) -> "Transcript":
+        """Return a prompt-only view with exact speaker labels substituted.
+
+        The caller supplies the already-validated, digest-bound overlay from a
+        single regeneration request. This does not rewrite retained words,
+        timestamps, withheld rows, or transcript identity; it changes only the
+        label rendered to the note generator.
+        """
+        labels = {override["source_speaker"]: override["replacement"] for override in overrides}
+        return self._derived(
+            source=self.source,
+            attribution=self.attribution,
+            turns=[
+                Turn(
+                    text=turn.text,
+                    speaker=labels.get(turn.speaker, turn.speaker),
+                    start=turn.start,
+                )
+                for turn in self.turns
+            ],
+        )
+
     def _derived(self, *, source: str, attribution: str, turns: list[Turn]) -> Transcript:
         """Make a transformed view without discarding capture provenance.
 

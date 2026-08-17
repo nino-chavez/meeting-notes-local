@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import uuid
 import zipfile
 from dataclasses import dataclass
@@ -998,6 +999,35 @@ def _opaque_meeting_id(value: object) -> str:
     return value
 
 
+def _validate_speaker_label_overrides(value: object) -> None:
+    """Admit the one bounded overlay the generate role can carry.
+
+    This is transport validation, not sidecar parsing: the desktop has already
+    derived the entries from its digest-bound correction history. The bridge
+    only ensures a hostile command cannot widen those exact source groups
+    before the validator presents them to the model.
+    """
+    if not isinstance(value, list) or len(value) > 3:
+        raise InvalidArguments("speaker label overlay has too many source groups")
+    previous = -1
+    for override in value:
+        if not isinstance(override, dict) or list(override) != ["source_speaker", "replacement"]:
+            raise InvalidArguments("speaker label overlay entry has the wrong shape")
+        rank = {None: 0, "Me": 1, "Them": 2}.get(override["source_speaker"])
+        replacement = override["replacement"]
+        if (
+            rank is None
+            or rank <= previous
+            or not isinstance(replacement, str)
+            or not replacement
+            or len(replacement.encode("utf-8")) > 80
+            or replacement != replacement.strip()
+            or any(unicodedata.category(character) == "Cc" for character in replacement)
+        ):
+            raise InvalidArguments("speaker label overlay is invalid")
+        previous = rank
+
+
 def _parse_command(frame: bytes, role: str) -> tuple[str, dict]:
     value = json.loads(frame, object_pairs_hook=_reject_duplicate_keys)
     if not isinstance(value, dict) or list(value) != [
@@ -1019,11 +1049,12 @@ def _parse_command(frame: bytes, role: str) -> tuple[str, dict]:
     # It names the installed model directory instead, because the manifest pins
     # model identity by digest and the caller owns where that model is
     # installed.
-    expected = (
-        ["meeting_id", "transcript_id", "model_directory", "deadline_s"]
-        if role == "generate"
-        else ["meeting_id", "note_id", "transcript_id"]
-    )
+    expected = ["meeting_id", "note_id", "transcript_id"]
+    if role == "generate":
+        expected = ["meeting_id", "transcript_id"]
+        if "speaker_label_overrides" in arguments:
+            expected.append("speaker_label_overrides")
+        expected.extend(("model_directory", "deadline_s"))
     if not isinstance(arguments, dict) or list(arguments) != expected:
         raise InvalidArguments("note arguments have the wrong shape")
     if role == "inspect":
@@ -1041,6 +1072,8 @@ def _parse_command(frame: bytes, role: str) -> tuple[str, dict]:
             deadline = arguments["deadline_s"]
             if type(deadline) is not int or not 1 <= deadline <= GENERATOR_DEADLINE_S:
                 raise InvalidArguments("generation deadline is outside the registered bound")
+            if "speaker_label_overrides" in arguments:
+                _validate_speaker_label_overrides(arguments["speaker_label_overrides"])
         _safe_digest(arguments["transcript_id"], "transcript ID")
     except BridgeRefused as exc:
         raise InvalidArguments(str(exc)) from exc

@@ -244,6 +244,11 @@ pub(crate) fn regenerate_note(
     let accepted = facade
         .regenerate_note(RegenerateNoteUiArgs {
             meeting_id,
+            speaker_label_overrides: crate::speaker_label_overrides_for(
+                meeting_id,
+                &source_transcript_sha256,
+                &app,
+            )?,
             source_transcript_sha256,
         })
         .map_err(ProductOperationFacadeError::safe_copy)

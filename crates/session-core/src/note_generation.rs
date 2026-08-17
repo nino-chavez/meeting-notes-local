@@ -233,6 +233,18 @@ impl NoteGenerationCoordinator {
         &self,
         arguments: &RegenerateNoteUiArgs,
     ) -> Result<Uuid, NoteGenerationCoordinatorError> {
+        self.regenerate_note_with(arguments, |_| Ok(()))
+    }
+
+    /// Runs the caller's source-side admission under the meeting lease and
+    /// before a replacement request exists. Desktop uses this for correction
+    /// overlays that are local to its storage layer; session-core keeps no
+    /// correction sidecar authority of its own.
+    pub fn regenerate_note_with(
+        &self,
+        arguments: &RegenerateNoteUiArgs,
+        source_admission: impl FnOnce(&Path) -> Result<(), NoteGenerationCoordinatorError>,
+    ) -> Result<Uuid, NoteGenerationCoordinatorError> {
         arguments.validate()?;
         let _lease = self
             .coordination
@@ -252,6 +264,7 @@ impl NoteGenerationCoordinator {
             arguments.meeting_id,
             &arguments.source_transcript_sha256,
         )?;
+        source_admission(&meeting_dir)?;
         let request = NoteGenerationRequest {
             schema: if meeting.artifacts.current_note.is_some() {
                 NoteGenerationRequestSchema::V2
@@ -262,6 +275,7 @@ impl NoteGenerationCoordinator {
             meeting_id: arguments.meeting_id,
             requested_at_epoch_seconds: self.identities.now_epoch_seconds(),
             source_transcript_sha256: arguments.source_transcript_sha256.clone(),
+            speaker_label_overrides: arguments.speaker_label_overrides.clone(),
             prior_note: meeting.artifacts.current_note.clone(),
         };
         request.validate()?;
@@ -358,6 +372,7 @@ impl NoteGenerationCoordinator {
         let arguments = NoteCreateWorkerArgs {
             meeting_id: request.meeting_id,
             source_transcript_sha256: request.source_transcript_sha256.clone(),
+            speaker_label_overrides: request.speaker_label_overrides.clone(),
         };
         let result = match self.worker.create(&arguments)? {
             NoteWorkerResult::Accepted(worker_digests) => {
@@ -989,6 +1004,7 @@ mod tests {
             RegenerateNoteUiArgs {
                 meeting_id: self.meeting_id,
                 source_transcript_sha256: self.transcript.clone(),
+                speaker_label_overrides: Vec::new(),
             }
         }
 
@@ -1176,6 +1192,7 @@ mod tests {
         let arguments = RegenerateNoteUiArgs {
             meeting_id: fixture.meeting_id,
             source_transcript_sha256: "a".repeat(64),
+            speaker_label_overrides: Vec::new(),
         };
         assert!(matches!(
             fixture
@@ -1193,6 +1210,41 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn source_admission_refuses_before_worker_or_replacement_receipt() {
+        let fixture = Fixture::new(false);
+        let worker = Arc::new(Worker {
+            meeting_dir: fixture.meeting_dir.clone(),
+            rejected: false,
+            calls: Mutex::new(0),
+        });
+        let coordinator = NoteGenerationCoordinator::with_runtime(
+            fixture.storage.clone(),
+            fixture.coordination.clone(),
+            worker.clone(),
+            Arc::new(Inspector),
+            Arc::new(Identity {
+                id: Uuid::parse_str(OPERATION_ID).unwrap(),
+                times: Mutex::new(VecDeque::from([1])),
+            }),
+            Arc::new(NoNoteGenerationFailureInjection),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            coordinator.regenerate_note_with(&fixture.arguments(), |_| {
+                Err(NoteGenerationCoordinatorError::Ambiguous("source admission refused"))
+            }),
+            Err(NoteGenerationCoordinatorError::Ambiguous("source admission refused"))
+        ));
+        assert_eq!(worker.calls(), 0);
+        assert!(OperationStore::open(&fixture.storage)
+            .unwrap()
+            .scan()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1277,6 +1329,7 @@ mod tests {
                         meeting_id: fixture.meeting_id,
                         requested_at_epoch_seconds: 1,
                         source_transcript_sha256: fixture.transcript.clone(),
+                        speaker_label_overrides: Vec::new(),
                         prior_note: None,
                     },
                 ))

@@ -865,6 +865,14 @@ def generate(
             transcript = load_bytes(transcript_bytes, source=f"transcript:{transcript_id}")
         except (UnicodeError, ValueError, KeyError, TypeError, IndexError) as exc:
             raise ArtifactFailure("artifact-invalid", False) from exc
+        # The bridge already closed this operation-scoped overlay. Apply it
+        # only after the retained bytes have passed their digest check, and
+        # only to the in-memory prompt view. Note artifacts and locators keep
+        # naming `transcript_id`, the immutable retained source.
+        if "speaker_label_overrides" in arguments:
+            transcript = transcript.with_speaker_label_overrides(
+                arguments["speaker_label_overrides"]
+            )
         if not transcript.turns:
             raise GenerationRefused("no-generatable-transcript", True)
         manifest, kept = _classify_candidates(transcript, ask)

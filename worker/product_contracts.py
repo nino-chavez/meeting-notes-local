@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 import uuid
 
 
@@ -42,6 +43,32 @@ def _digest(value: object, label: str) -> str:
     return value
 
 
+def validate_speaker_label_overrides(value: object) -> list[dict]:
+    if not isinstance(value, list) or len(value) > 3:
+        raise ProductContractRefused("speaker label overlay has too many source groups")
+    previous = -1
+    for override in value:
+        override = _exact_object(
+            override, {"source_speaker", "replacement"}, "speaker label overlay entry"
+        )
+        rank = {None: 0, "Me": 1, "Them": 2}.get(override["source_speaker"])
+        if rank is None or rank <= previous:
+            raise ProductContractRefused(
+                "speaker label overlay source groups are not unique and ordered"
+            )
+        replacement = override["replacement"]
+        if (
+            not isinstance(replacement, str)
+            or not replacement
+            or len(replacement.encode("utf-8")) > 80
+            or replacement != replacement.strip()
+            or any(unicodedata.category(character) == "Cc" for character in replacement)
+        ):
+            raise ProductContractRefused("speaker label overlay replacement is invalid")
+        previous = rank
+    return value
+
+
 def validate_transcript_restore_arguments(value: object) -> dict:
     arguments = _exact_object(
         value,
@@ -71,8 +98,8 @@ def validate_note_create_arguments(value: object) -> dict:
     assembler's job; this contract only closes the outer shape.
     """
     names = {"meeting_id", "source_transcript_sha256"}
-    if isinstance(value, dict) and "generation" in value:
-        names = names | {"generation"}
+    if isinstance(value, dict):
+        names |= {key for key in ("generation", "speaker_label_overrides") if key in value}
     arguments = _exact_object(value, names, "note.create arguments")
     _uuid(arguments["meeting_id"], "meeting_id")
     _digest(arguments["source_transcript_sha256"], "source_transcript_sha256")
@@ -120,6 +147,8 @@ def validate_note_create_arguments(value: object) -> dict:
         ):
             raise ProductContractRefused(
                 "generation receipt elapsed_s must be a nonnegative number")
+    if "speaker_label_overrides" in arguments:
+        validate_speaker_label_overrides(arguments["speaker_label_overrides"])
     return arguments
 
 
