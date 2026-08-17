@@ -18,6 +18,7 @@ import {
   mergePermissions,
   noteGenerationPresentation,
   permissionSummary,
+  recordingDevicePresentation,
   retentionLabel,
   shouldPollSnapshot,
   transcriptPlainText,
@@ -296,6 +297,31 @@ test("retry quality uses closed labels and keeps unknown kinds safe", () => {
   assert.equal(transcriptRetryQualityKindLabel("<img src=x onerror=alert(1)>"), "Observation");
 });
 
+test("recording device context never renders private backend fields or arbitrary copy", () => {
+  assert.deepEqual(recordingDevicePresentation({
+    state: "identified",
+    message: "Private device name",
+    name: "Private device name",
+    index: 4,
+  }), {
+    state: "identified",
+    title: "Recording device recorded",
+    detail: "Yawn verified that a microphone identity was recorded for this meeting. This does not confirm it was the audio input you intended to use.",
+    action: null,
+  });
+  assert.deepEqual(recordingDevicePresentation({
+    state: "unknown",
+    message: "Private receipt text",
+    nextAction: "check-audio-input",
+  }), {
+    state: "unknown",
+    title: "Recording device not verified",
+    detail: "Yawn could not verify which microphone identity was recorded for this meeting.",
+    action: { action: "open-settings", label: "Check audio input" },
+  });
+  assert.equal(recordingDevicePresentation({ state: "unknown", nextAction: "anything-else" }).action, null);
+});
+
 test("retry comparison UI keeps the decision explicit and uses exact backend commands", async () => {
   const source = await readFile(new URL("./main.js", import.meta.url), "utf8");
   assert.match(source, /invoke\("transcript_retry_pending", \{\s*meetingId: retry\.meetingId,\s*sourceTranscriptSha256: retry\.sourceTranscriptSha256,/);
@@ -317,6 +343,8 @@ test("retry comparison redacts withheld text and keeps the summary before person
   assert.match(source, /renderMeetingNote\(note, claimEvidence\)\}\n\s*\$\{renderGenerateNote\(note, recovery\)\}\n\s*\$\{renderTranscriptRetryAction\(note, transcript, recovery\)\}\n\s*\$\{renderTranscriptDisclosure\(transcript, recovery\)\}/);
   assert.match(source, /<aside class="meeting-notes-pane">\s*<section class="note-section your-notes-section"/);
   assert.match(source, /function renderRetryWarnings\(warnings, label\)/);
+  assert.match(source, /renderRetryRecordingDevice\(retry\.recordingDevice\)/);
+  assert.doesNotMatch(source, /retry\.recordingDevice\.(name|index|hostapi|message)/);
 });
 
 test("startup keeps polling until the app is ready", () => {

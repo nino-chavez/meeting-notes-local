@@ -430,6 +430,28 @@ export function transcriptRetryQualityPresentation(quality = null) {
   return { state, message, observations };
 }
 
+// The native projection deliberately withholds device names and metadata. Keep
+// this mapping closed too: the UI accepts only the state and action token, then
+// supplies its own copy instead of rendering receipt-derived text.
+export function recordingDevicePresentation(device = null) {
+  if (device?.state === "identified") {
+    return {
+      state: "identified",
+      title: "Recording device recorded",
+      detail: "Yawn verified that a microphone identity was recorded for this meeting. This does not confirm it was the audio input you intended to use.",
+      action: null,
+    };
+  }
+  return {
+    state: "unknown",
+    title: "Recording device not verified",
+    detail: "Yawn could not verify which microphone identity was recorded for this meeting.",
+    action: device?.nextAction === "check-audio-input"
+      ? { action: "open-settings", label: "Check audio input" }
+      : null,
+  };
+}
+
 export function transcriptRetryQualityKindLabel(kind) {
   const labels = {
     silence: "Silence",

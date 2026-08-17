@@ -482,6 +482,8 @@ struct RetryComparisonResponse {
     current: RetryTranscriptProjection,
     candidate: RetryTranscriptProjection,
     quality: local_meeting_notes_session_core::capture_quality::CaptureQualityProjection,
+    recording_device:
+        local_meeting_notes_session_core::capture_quality::RecordingDeviceProjection,
 }
 
 #[derive(Deserialize)]
@@ -5643,6 +5645,15 @@ fn retry_comparison_response(
         "Recording-quality evidence changed while opening this retry. Reopen the meeting and try again."
             .to_string()
     })?;
+    let recording_device =
+        local_meeting_notes_session_core::capture_quality::project_recording_device(
+            &directory,
+            &meeting,
+        )
+        .map_err(|_| {
+            "Recording-device evidence changed while opening this retry. Reopen the meeting and try again."
+                .to_string()
+        })?;
     Ok(RetryComparisonResponse {
         meeting_id: operation.meeting_id,
         operation_id: operation.operation_id,
@@ -5657,6 +5668,7 @@ fn retry_comparison_response(
             warnings: candidate_warnings,
         },
         quality,
+        recording_device,
     })
 }
 

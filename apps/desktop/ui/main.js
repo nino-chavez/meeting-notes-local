@@ -13,6 +13,7 @@ import {
   mergePermissions,
   noteGenerationPresentation,
   permissionSummary,
+  recordingDevicePresentation,
   retentionLabel,
   shouldPollSnapshot,
   transcriptPlainText,
@@ -1056,6 +1057,16 @@ function renderRetryQuality(quality) {
   `;
 }
 
+function renderRetryRecordingDevice(device) {
+  const presentation = recordingDevicePresentation(device);
+  return `
+    <section class="retry-quality" data-state="${escapeHtml(presentation.state)}" aria-labelledby="retry-device-heading">
+      <div><h3 id="retry-device-heading">${escapeHtml(presentation.title)}</h3><p>${escapeHtml(presentation.detail)}</p></div>
+      ${presentation.action ? `<button class="button button-quiet button-small" type="button" data-action="${presentation.action.action}">${escapeHtml(presentation.action.label)}</button>` : ""}
+    </section>
+  `;
+}
+
 function renderRetryComparisonTurns(turns, label) {
   const rows = Array.isArray(turns) ? turns : [];
   return `
@@ -1087,6 +1098,7 @@ function renderTranscriptRetrySheet() {
           <button class="icon-button" type="button" data-action="decide-retry-later" aria-label="Decide later">×</button>
         </div>
         ${renderRetryQuality(retry.quality)}
+        ${renderRetryRecordingDevice(retry.recordingDevice)}
         <div class="retry-transcript-comparison">
           ${renderRetryComparisonTurns(retry.current?.turns, "current")}
           ${renderRetryComparisonTurns(retry.candidate?.turns, "candidate")}
