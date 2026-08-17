@@ -427,6 +427,25 @@ Back and reopen also remains to be observed after that copy is fixed. The three
 synthetic states are preserved as recoverable fixture roots; no private content,
 real audio, Settings change, permission change, or recording was involved.
 
+**Retry-promotion copy correction — source-verified, 2026-08-17.** The success
+toast no longer claims a clearing event. It now reads `The retry transcript is
+now current. Generate a new note when you're ready.` in every case. The command
+is handed one settled outcome and no note fact, and a replayed promotion clears
+nothing because the pointer already moved, so conditional copy would have been
+guessing rather than reporting. The mapping was extracted into a pure function
+with exact-copy coverage for all three outcomes.
+
+Promotion's own note invalidation was untested until now — every retry fixture
+started with `current_note: None`, including the one behind the earlier rendered
+walk. A new session-core test gives the meeting a real two-file note revision,
+promotes, and proves the pointer is cleared, the lifecycle returns to
+`TranscriptReady`, and the note bytes survive on disk. Removing the clearing
+line makes that test fail, so the pre-decision modal warning is now evidenced
+rather than assumed.
+
+This is source-verified evidence only. The corrected copy has not been observed
+rendered, and the note-existed promotion has not been walked in the fixture app.
+
 **Developer ID-signed local-bundle receipt — 2026-08-17.** The unreleased source
 build at `target/release/bundle/macos/Yawn.app`, built from app source commit
 `97ff8c9`, passed the `internal-alpha` admission check. The bounded local lane
@@ -542,8 +561,8 @@ product-authored quality guidance. The retry comparison, explicit keep or
 promote decisions, retained-audio playback, and bounded device explanation are
 built and packaged in Preview. The exact fixture renders review, quality,
 device, playback, Keep-current, and Promote-retry states. Clearing a generated
-note that actually exists, note regeneration, and exact installed-production-
-package verification remain open.
+note that actually exists is proven in source but not yet rendered; note
+regeneration and exact installed-production-package verification remain open.
 
 **Scope.**
 

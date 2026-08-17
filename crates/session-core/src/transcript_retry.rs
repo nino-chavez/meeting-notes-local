@@ -701,7 +701,7 @@ mod tests {
     use super::*;
     use crate::meeting::{
         AudioRetention, AudioRetentionRule, MAX_MEETING_RECORD_BYTES, MeetingArtifacts,
-        MeetingSchema, artifact_ref,
+        MeetingSchema, NoteRevisionRef, artifact_ref,
     };
     use crate::storage::StorageRoot;
     use std::os::unix::fs::OpenOptionsExt;
@@ -890,6 +890,66 @@ mod tests {
         assert_eq!(
             authority.promote_candidate("meeting-a", id).unwrap(),
             TranscriptRetryOutcome::CandidatePromoted
+        );
+    }
+
+    /// Promotion invalidates a generated note, which is what the pre-decision
+    /// modal warns about. Every other retry fixture starts with no note, so
+    /// this is the case that proves the warning is honest.
+    #[test]
+    fn promotion_clears_an_existing_note_pointer_and_preserves_its_bytes() {
+        let fixture = fixture();
+        let mut meeting = load_meeting(&fixture.meeting_dir).unwrap();
+        let source_transcript_sha256 = meeting
+            .artifacts
+            .current_transcript
+            .as_ref()
+            .unwrap()
+            .sha256
+            .clone();
+
+        // A note revision is two digest-named files under notes/, bound to the
+        // transcript it was generated from.
+        create_private_dir(&fixture.meeting_dir.join("notes")).unwrap();
+        let note_json = br#"{"schema":"meeting-note/1"}"#.to_vec();
+        let note_markdown = b"# note".to_vec();
+        let note_json_relative = format!("notes/{}.json", digest_bytes(&note_json));
+        let note_markdown_relative = format!("notes/{}.md", digest_bytes(&note_markdown));
+        let note_json_path = fixture.meeting_dir.join(&note_json_relative);
+        private_file(&note_json_path, &note_json);
+        private_file(
+            &fixture.meeting_dir.join(&note_markdown_relative),
+            &note_markdown,
+        );
+        meeting.artifacts.current_note = Some(NoteRevisionRef {
+            json: artifact_ref(&fixture.meeting_dir, &note_json_relative).unwrap(),
+            markdown: artifact_ref(&fixture.meeting_dir, &note_markdown_relative).unwrap(),
+            source_transcript_sha256,
+        });
+        meeting.lifecycle = MeetingLifecycle::Ready;
+        write_meeting(&fixture.meeting_dir, &meeting).unwrap();
+
+        let authority = TranscriptRetryAuthority::new(&fixture.storage, &fixture.coordination);
+        let id = Uuid::new_v4();
+        let candidate = b"candidate transcript";
+        assert_eq!(
+            authority
+                .create_candidate("meeting-a", id, candidate, &binding(&fixture, candidate))
+                .unwrap(),
+            TranscriptRetryOutcome::CandidateAvailableForComparison
+        );
+        assert_eq!(
+            authority.promote_candidate("meeting-a", id).unwrap(),
+            TranscriptRetryOutcome::CandidatePromoted
+        );
+
+        let meeting = load_meeting(&fixture.meeting_dir).unwrap();
+        assert!(meeting.artifacts.current_note.is_none());
+        assert_eq!(meeting.lifecycle, MeetingLifecycle::TranscriptReady);
+        // The pointer is dropped, never the operator's bytes.
+        assert_eq!(
+            read_private_bytes(&note_json_path, MAX_TRANSCRIPT_BYTES).unwrap(),
+            note_json
         );
     }
 

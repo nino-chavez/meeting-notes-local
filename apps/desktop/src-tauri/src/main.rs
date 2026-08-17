@@ -626,7 +626,7 @@ enum RetryDecisionInput {
     UseRetry,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct RetryDecisionResponse {
     outcome: &'static str,
     message: &'static str,
@@ -5965,6 +5965,31 @@ fn transcript_retry_pending(
         .transpose()
 }
 
+/// The exact operator copy for a settled retry decision.
+///
+/// Promotion always leaves the meeting without a generated note, but it cannot
+/// report having *cleared* one. The meeting may never have had a note, and a
+/// replayed promotion clears nothing because the pointer already moved. So the
+/// success copy states what is now true and names the next step, instead of
+/// claiming an event this command has no fact for.
+fn retry_decision_response(
+    outcome: TranscriptRetryOutcome,
+) -> Result<RetryDecisionResponse, String> {
+    match outcome {
+        TranscriptRetryOutcome::CurrentKept => Ok(RetryDecisionResponse {
+            outcome: "current-kept",
+            message: "The current transcript was kept.",
+        }),
+        TranscriptRetryOutcome::CandidatePromoted => Ok(RetryDecisionResponse {
+            outcome: "candidate-promoted",
+            message: "The retry transcript is now current. Generate a new note when you're ready.",
+        }),
+        TranscriptRetryOutcome::CandidateAvailableForComparison => {
+            Err("The retry candidate is still awaiting a decision.".into())
+        }
+    }
+}
+
 #[tauri::command(rename_all = "camelCase")]
 fn transcript_retry_decide(
     meeting_id: Uuid,
@@ -6000,24 +6025,12 @@ fn transcript_retry_decide(
         )
         .map_err(product_facade::ProductOperationFacadeError::safe_copy)
         .map_err(str::to_owned)?;
-    let response = match outcome {
-        TranscriptRetryOutcome::CurrentKept => RetryDecisionResponse {
-            outcome: "current-kept",
-            message: "The current transcript was kept.",
-        },
-        TranscriptRetryOutcome::CandidatePromoted => {
-            with_preview_library_invalidated(&state, || ()).map_err(|_| {
-                "The retry transcript was selected, but the library could not refresh.".to_string()
-            })?;
-            RetryDecisionResponse {
-                outcome: "candidate-promoted",
-                message: "The retry transcript is now current. Its previous note was cleared.",
-            }
-        }
-        TranscriptRetryOutcome::CandidateAvailableForComparison => {
-            return Err("The retry candidate is still awaiting a decision.".into());
-        }
-    };
+    let response = retry_decision_response(outcome)?;
+    if matches!(outcome, TranscriptRetryOutcome::CandidatePromoted) {
+        with_preview_library_invalidated(&state, || ()).map_err(|_| {
+            "The retry transcript was selected, but the library could not refresh.".to_string()
+        })?;
+    }
     Ok(response)
 }
 
@@ -11075,6 +11088,39 @@ mod tests {
         assert_eq!(snapshot.capture, CaptureState::TranscriptReady);
         assert_eq!(snapshot.meeting_id.as_deref(), Some("meeting-fixture"));
         assert_eq!(snapshot.turns[0].text, "visible");
+    }
+
+    #[test]
+    fn keeping_the_current_transcript_reports_only_that() {
+        let response = retry_decision_response(TranscriptRetryOutcome::CurrentKept).unwrap();
+
+        assert_eq!(response.outcome, "current-kept");
+        assert_eq!(response.message, "The current transcript was kept.");
+    }
+
+    /// The promoted copy is deliberately identical whether or not the meeting
+    /// had a generated note, because this command is handed one settled outcome
+    /// and no note fact. Both cases must read truthfully off the same string.
+    #[test]
+    fn promoting_a_retry_never_claims_a_note_was_cleared() {
+        let response = retry_decision_response(TranscriptRetryOutcome::CandidatePromoted).unwrap();
+
+        assert_eq!(response.outcome, "candidate-promoted");
+        assert_eq!(
+            response.message,
+            "The retry transcript is now current. Generate a new note when you're ready."
+        );
+        assert!(!response.message.contains("cleared"));
+        assert!(!response.message.contains("previous note"));
+    }
+
+    #[test]
+    fn an_undecided_candidate_is_refused_rather_than_reported_as_settled() {
+        assert_eq!(
+            retry_decision_response(TranscriptRetryOutcome::CandidateAvailableForComparison)
+                .unwrap_err(),
+            "The retry candidate is still awaiting a decision."
+        );
     }
 
     #[test]

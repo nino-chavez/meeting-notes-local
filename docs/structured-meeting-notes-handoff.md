@@ -10,10 +10,10 @@ playback, and source-bound transcript retry.
 
 The fixture directly proved the read-only comparison, **Decide later**,
 playback/Stop, **Keep current**, and **Use retry** paths without using a real
-meeting. It also exposed one truthful-copy bug: after promoting a retry on a
-meeting that never had a generated note, the success toast still says that a
-previous note was cleared. Fix that copy before extending the fixture to
-synthetic note and source-link states.
+meeting. It also exposed one truthful-copy bug, now fixed in source: after
+promoting a retry on a meeting that never had a generated note, the success
+toast claimed a previous note was cleared. The corrected copy has not yet been
+observed rendered.
 
 Nothing in this work is shipped. The Developer ID build remains unnotarized and
 uninstalled. `/Applications/Yawn.app` was not changed.
@@ -156,33 +156,44 @@ The directory names prove only that the roots exist. Their described states are
 direct Computer Use observation receipts recorded in this handoff and the
 roadmap/runbook, not facts that can be re-derived from the names alone.
 
-## First bug to fix
+## First bug — fixed in source, not yet rendered
 
-The Use-retry success message is unconditional:
-
-```text
-apps/desktop/src-tauri/src/main.rs:6014
-"The retry transcript is now current. Its previous note was cleared."
-```
-
-The synthetic meeting had `current_note: None`, so the second sentence claimed
-an event that did not happen. The surrounding modal warning is still correct:
-promoting a retry invalidates any current generated note when one exists.
-
-Use truthful unconditional success copy, or carry an exact pre-decision
-`had_current_note` fact through the response. The smaller honest fix is likely:
+The Use-retry success toast was unconditional and claimed a clearing event on a
+meeting that never had a note. It now reads:
 
 ```text
 The retry transcript is now current. Generate a new note when you're ready.
 ```
 
-Verify the final wording against both cases: no previous note and a previous
-note pointer that is cleared. Update exact-copy tests. Do not weaken the durable
-promotion behavior to make the toast easier.
+Unconditional copy was the right call, not a `had_current_note` fact threaded
+through the response. `transcript_retry_decide` receives one settled outcome and
+no note state, and `promote_candidate`'s replay path returns `CandidatePromoted`
+without touching the note because the pointer already moved. A conditional
+message would have had to guess on that path.
+
+The outcome-to-copy mapping now lives in a pure `retry_decision_response` in
+`apps/desktop/src-tauri/src/main.rs`, with exact-copy tests for all three
+outcomes. Promotion and note-invalidation semantics are unchanged.
+
+The second half of the fix closed a real coverage hole. Every retry fixture in
+the repository started with `current_note: None`, so nothing proved that
+promotion clears a note that exists — the behavior the pre-decision modal warns
+about. `promotion_clears_an_existing_note_pointer_and_preserves_its_bytes` in
+`crates/session-core/src/transcript_retry.rs` builds a real two-file note
+revision, promotes, and asserts the pointer clears, the lifecycle returns to
+`TranscriptReady`, and the note bytes survive. Deleting the clearing line makes
+it fail, which is how the test was confirmed load-bearing.
+
+Gates run for this change, all passing: session-core 457 library tests (up one),
+11 fixture-binary, 17 process-fault, 8 doc; desktop 145 bin tests plus 6 and 6
+in the contract targets; 37 UI tests. `cargo fmt --check` reports the same
+pre-existing drift in twelve untouched files before and after — this change adds
+none, and that cleanup is deliberately not bundled here.
 
 ## Next build sequence
 
-1. Fix and test the retry-promotion success message.
+1. ~~Fix and test the retry-promotion success message.~~ Done in source; the
+   corrected toast still needs a rendered observation.
 2. Preserve the current promoted fixture with the archive command before
    reseeding another root. Use a new absent archive label; never overwrite an
    existing archive.
@@ -264,13 +275,11 @@ Continue Yawn from docs/structured-meeting-notes-handoff.md on branch
 agent/structured-meeting-notes in
 /Users/nino/Workspace/dev/apps/yawn-app.
 
-First fix the unconditional Use-retry success toast in
-apps/desktop/src-tauri/src/main.rs. The current copy says a previous note was
-cleared even when the meeting had no note. Keep transcript promotion and note
-invalidation semantics unchanged. Add exact-copy coverage for both note/no-note
-cases or choose truthful unconditional copy.
+The unconditional Use-retry success toast is already fixed in source and
+covered by tests. It has not been observed rendered, so the walk below is what
+closes it.
 
-Then preserve the current marker-bound synthetic fixture with the recoverable
+Preserve the current marker-bound synthetic fixture with the recoverable
 archive command, rebuild and verify Yawn Fixture.app, seed a fresh fixture,
 import only the verified public speech model, and repeat the Use-retry journey
 with computer-use through node_repl + @oai/sky. Refresh after every action.
