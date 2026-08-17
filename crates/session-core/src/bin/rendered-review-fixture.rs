@@ -1,29 +1,31 @@
 //! Seeds one private, deterministic app-data tree for rendered review.
 //!
-//! The command accepts exactly one absolute path. The final component must be
-//! `com.ninochavez.local-meeting-notes.fixture`; it never accepts a live app
-//! data root and it has no cleanup mode.
+//! The seed command accepts exactly one absolute path. The final component must
+//! be `com.ninochavez.local-meeting-notes.fixture`; the archive command moves a
+//! validated fixture to a recoverable sibling archive and never deletes data.
 
 use std::env;
 use std::fs;
 use std::io::{self, Read, Write};
+#[cfg(target_os = "macos")]
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use local_meeting_notes_session_core::meeting::{
-    artifact_ref, load_meeting, retention_policy_sha256, verify_record_artifacts, write_meeting,
     AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts, MeetingLifecycle,
-    MeetingRecord, MeetingSchema,
+    MeetingRecord, MeetingSchema, artifact_ref, load_meeting, retention_policy_sha256,
+    verify_record_artifacts, write_meeting,
 };
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
 use local_meeting_notes_session_core::model_store::{
-    activate_model, install_receipt_bytes, verify_model_directory, ModelCatalog, ModelStoreError,
-    TranscriptModelFileRole,
+    ModelCatalog, ModelStoreError, TranscriptModelFileRole, activate_model, install_receipt_bytes,
+    verify_model_directory,
 };
 use local_meeting_notes_session_core::retention::{AppDataWriterLock, AppDataWriterLockError};
 use local_meeting_notes_session_core::runtime::{RuntimeError, RuntimeManifest};
 use local_meeting_notes_session_core::storage::{
-    create_private_dir, durable_create_new, sync_directory, StorageRoot,
+    StorageRoot, create_private_dir, durable_create_new, sync_directory,
 };
 use local_meeting_notes_session_core::transcript_retry::{
     TranscriptRetryAuthority, TranscriptRetrySourceBinding,
@@ -38,6 +40,8 @@ const OPERATION_ID: &str = "22222222-2222-4222-8222-222222222222";
 const CREATED_AT: u64 = 1_700_000_042;
 const AUDIO_SAMPLE_RATE: u32 = 8_000;
 const AUDIO_FRAMES: usize = AUDIO_SAMPLE_RATE as usize * 8;
+#[cfg(target_os = "macos")]
+const RENAME_NOFOLLOW_ANY: libc::c_uint = 0x0000_0010;
 
 #[derive(Debug, thiserror::Error)]
 enum FixtureError {
@@ -67,6 +71,18 @@ enum FixtureError {
     Retry(#[from] local_meeting_notes_session_core::transcript_retry::TranscriptRetryError),
     #[error("fixture root marker is missing or not the exact synthetic marker")]
     InvalidMarker,
+    #[error("archive root must be an absolute path")]
+    RelativeArchiveRoot,
+    #[error("archive root final component must be {BUNDLE_NAME}.archive-<label>")]
+    WrongArchiveName,
+    #[error("archive root must be absent")]
+    ExistingArchiveRoot,
+    #[error("archive root must share the fixture root's canonical parent")]
+    ArchiveParentMismatch,
+    #[error("archive root parent is not a directory")]
+    UnsafeArchiveParent,
+    #[error("model fixture marker is missing or not the exact synthetic model marker")]
+    InvalidModelMarker,
     #[error("model install path is unsafe: {0}")]
     UnsafeInstallPath(String),
     #[error("bundle runtime manifest has no verified model catalog")]
@@ -88,7 +104,7 @@ enum FixtureError {
 fn main() {
     let mut args = env::args().skip(1);
     let Some(first) = args.next() else {
-        eprintln!("usage: rendered-review-fixture /absolute/path/{BUNDLE_NAME}");
+        usage();
         std::process::exit(2);
     };
     let result = if first == "install-model" {
@@ -102,7 +118,9 @@ fn main() {
             || source.is_none()
             || model_id.is_none()
         {
-            eprintln!("usage: rendered-review-fixture install-model ROOT BUNDLE_RESOURCES SOURCE_MODEL_DIR MODEL_ID");
+            eprintln!(
+                "usage: rendered-review-fixture install-model ROOT BUNDLE_RESOURCES SOURCE_MODEL_DIR MODEL_ID"
+            );
             std::process::exit(2);
         }
         install_model(
@@ -112,8 +130,20 @@ fn main() {
             model_id.as_deref().expect("checked model id"),
             repository_root(),
         )
+    } else if first == "archive" {
+        let root = args.next();
+        let archive_root = args.next();
+        if args.next().is_some() || root.is_none() || archive_root.is_none() {
+            eprintln!("usage: rendered-review-fixture archive ROOT ARCHIVE_ROOT");
+            std::process::exit(2);
+        }
+        archive(
+            Path::new(root.as_deref().expect("checked root")),
+            Path::new(archive_root.as_deref().expect("checked archive root")),
+            repository_root(),
+        )
     } else if args.next().is_some() {
-        eprintln!("usage: rendered-review-fixture /absolute/path/{BUNDLE_NAME}");
+        usage();
         std::process::exit(2);
     } else {
         seed(Path::new(&first), repository_root())
@@ -124,9 +154,16 @@ fn main() {
     }
     if first == "install-model" {
         println!("installed verified synthetic model");
+    } else if first == "archive" {
+        println!("archived synthetic fixture to a recoverable sibling");
     } else {
         println!("seeded synthetic fixture at {first}");
     }
+}
+
+fn usage() {
+    eprintln!("usage: rendered-review-fixture /absolute/path/{BUNDLE_NAME}");
+    eprintln!("       rendered-review-fixture archive ROOT ARCHIVE_ROOT");
 }
 
 fn repository_root() -> PathBuf {
@@ -414,6 +451,283 @@ fn install_model(
     Ok(())
 }
 
+fn archive(root: &Path, archive_root: &Path, repository: PathBuf) -> Result<(), FixtureError> {
+    validate_archive(root, archive_root, &repository)?;
+    let storage = StorageRoot::create(root, &repository)?;
+    let _writer_lock = AppDataWriterLock::acquire(&storage)?;
+    // The destination and every source contract are checked again while the
+    // canonical writer lock is held, immediately before the atomic rename.
+    validate_archive(root, archive_root, &repository)?;
+    let parent = root
+        .parent()
+        .ok_or(FixtureError::BroadRoot)?
+        .canonicalize()
+        .map_err(FixtureError::Io)?;
+    let source_name = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(FixtureError::WrongRootName)?;
+    let archive_name = archive_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(FixtureError::WrongArchiveName)?;
+    rename_fixture_exclusive(&parent, source_name, archive_name)?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn rename_fixture_exclusive(
+    parent: &Path,
+    source_name: &str,
+    archive_name: &str,
+) -> io::Result<()> {
+    let parent = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(parent)?;
+    let source_name = std::ffi::CString::new(source_name.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "source name contains NUL"))?;
+    let archive_name = std::ffi::CString::new(archive_name.as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "archive name contains NUL"))?;
+    let source_fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            source_name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if source_fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let source = unsafe { std::fs::File::from_raw_fd(source_fd) };
+    if !source.metadata()?.is_dir() {
+        return Err(io::Error::other("fixture source is not a directory"));
+    }
+    let result = unsafe {
+        libc::renameatx_np(
+            parent.as_raw_fd(),
+            source_name.as_ptr(),
+            parent.as_raw_fd(),
+            archive_name.as_ptr(),
+            libc::RENAME_EXCL | RENAME_NOFOLLOW_ANY,
+        )
+    };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    parent.sync_all()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn rename_fixture_exclusive(
+    _parent: &Path,
+    _source_name: &str,
+    _archive_name: &str,
+) -> io::Result<()> {
+    Err(io::Error::other(
+        "exclusive fixture archive is unsupported on this platform",
+    ))
+}
+
+fn validate_archive(
+    root: &Path,
+    archive_root: &Path,
+    repository: &Path,
+) -> Result<(), FixtureError> {
+    validate_archive_source(root, repository)?;
+    validate_archive_destination(root, archive_root)?;
+    Ok(())
+}
+
+fn validate_archive_source(root: &Path, repository: &Path) -> Result<(), FixtureError> {
+    if !root.is_absolute() {
+        return Err(FixtureError::RelativeRoot);
+    }
+    if root.file_name().and_then(|name| name.to_str()) != Some(BUNDLE_NAME) {
+        return Err(FixtureError::WrongRootName);
+    }
+    let metadata = fs::symlink_metadata(root).map_err(|_| FixtureError::UnsafeDirectory)?;
+    if metadata.file_type().is_symlink() {
+        return Err(FixtureError::Symlink);
+    }
+    if !metadata.file_type().is_dir() || metadata.permissions().mode() & 0o777 != 0o700 {
+        return Err(FixtureError::UnsafeDirectory);
+    }
+    validate_fixture_parent(root, repository)?;
+    for child in ["diagnostics", "profile", "meetings", "enrollment", "models"] {
+        let path = root.join(child);
+        let metadata = fs::symlink_metadata(path).map_err(|_| FixtureError::UnsafeDirectory)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.file_type().is_dir()
+            || metadata.permissions().mode() & 0o777 != 0o700
+        {
+            return Err(FixtureError::UnsafeDirectory);
+        }
+    }
+    validate_synthetic_marker(root)?;
+    validate_model_marker(root)?;
+    reject_symlinks(root)?;
+    Ok(())
+}
+
+fn reject_symlinks(path: &Path) -> Result<(), FixtureError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() {
+        return Err(FixtureError::Symlink);
+    }
+    if metadata.file_type().is_dir() {
+        for entry in fs::read_dir(path)? {
+            reject_symlinks(&entry?.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_archive_destination(root: &Path, archive_root: &Path) -> Result<(), FixtureError> {
+    if !archive_root.is_absolute() {
+        return Err(FixtureError::RelativeArchiveRoot);
+    }
+    let name = archive_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or(FixtureError::WrongArchiveName)?;
+    let prefix = format!("{BUNDLE_NAME}.archive-");
+    let Some(label) = name.strip_prefix(&prefix) else {
+        return Err(FixtureError::WrongArchiveName);
+    };
+    if !(1..=64).contains(&label.len())
+        || !label
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(FixtureError::WrongArchiveName);
+    }
+    if fs::symlink_metadata(archive_root).is_ok() {
+        return Err(FixtureError::ExistingArchiveRoot);
+    }
+    let root_parent = root
+        .parent()
+        .ok_or(FixtureError::BroadRoot)?
+        .canonicalize()?;
+    let archive_parent = archive_root
+        .parent()
+        .ok_or(FixtureError::ArchiveParentMismatch)?
+        .canonicalize()
+        .map_err(|_| FixtureError::ArchiveParentMismatch)?;
+    if root_parent != archive_parent {
+        return Err(FixtureError::ArchiveParentMismatch);
+    }
+    let metadata =
+        fs::symlink_metadata(&archive_parent).map_err(|_| FixtureError::UnsafeArchiveParent)?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(FixtureError::UnsafeArchiveParent);
+    }
+    Ok(())
+}
+
+fn validate_fixture_parent(root: &Path, repository: &Path) -> Result<PathBuf, FixtureError> {
+    let parent = root.parent().ok_or(FixtureError::BroadRoot)?;
+    let canonical_parent = parent.canonicalize()?;
+    if [
+        "/",
+        "/tmp",
+        "/private/tmp",
+        "/Users",
+        "/Users/nino",
+        "/Users/nino/Workspace",
+        "/Users/nino/Workspace/dev",
+        "/Users/nino/Workspace/dev/apps",
+    ]
+    .iter()
+    .any(|broad| canonical_parent == Path::new(broad))
+    {
+        return Err(FixtureError::BroadRoot);
+    }
+    let repository = repository
+        .canonicalize()
+        .unwrap_or_else(|_| repository.to_path_buf());
+    let canonical_root = root.canonicalize()?;
+    if canonical_root.starts_with(&repository) || canonical_parent.starts_with(&repository) {
+        return Err(FixtureError::InsideRepository);
+    }
+    let metadata = fs::symlink_metadata(&canonical_parent)?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        return Err(FixtureError::UnsafeArchiveParent);
+    }
+    Ok(canonical_parent)
+}
+
+fn validate_synthetic_marker(root: &Path) -> Result<(), FixtureError> {
+    let marker_path = root.join("SYNTHETIC_FIXTURE.json");
+    let marker_metadata =
+        fs::symlink_metadata(&marker_path).map_err(|_| FixtureError::InvalidMarker)?;
+    if marker_metadata.file_type().is_symlink()
+        || !marker_metadata.file_type().is_file()
+        || marker_metadata.permissions().mode() & 0o777 != 0o600
+    {
+        return Err(FixtureError::InvalidMarker);
+    }
+    let marker: SyntheticFixtureMarker = serde_json::from_slice(&fs::read(&marker_path)?)
+        .map_err(|_| FixtureError::InvalidMarker)?;
+    if marker.schema != "synthetic-fixture-evidence/1"
+        || marker.bundle != BUNDLE_NAME
+        || marker.private_data
+        || marker.product_evidence
+        || marker.content != "deterministic invented review fixture"
+        || marker.meeting_id != MEETING_ID
+        || marker.retry_operation_id != OPERATION_ID
+        || marker.covered_states
+            != vec![
+                "retained meeting",
+                "verified audio",
+                "quality and device projections",
+                "pending transcript retry",
+            ]
+        || marker.note
+            != "No generated note is seeded; this fixture remains TranscriptReady and does not invoke a note worker."
+    {
+        return Err(FixtureError::InvalidMarker);
+    }
+    Ok(())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SyntheticModelFixtureMarker {
+    schema: String,
+    model_id: String,
+    revision: String,
+    private_data: bool,
+    product_evidence: bool,
+    note: String,
+}
+
+fn validate_model_marker(root: &Path) -> Result<(), FixtureError> {
+    let marker_path = root.join("MODEL_FIXTURE.json");
+    let Ok(metadata) = fs::symlink_metadata(&marker_path) else {
+        return Ok(());
+    };
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_file()
+        || metadata.permissions().mode() & 0o777 != 0o600
+    {
+        return Err(FixtureError::InvalidModelMarker);
+    }
+    let marker: SyntheticModelFixtureMarker = serde_json::from_slice(&fs::read(marker_path)?)
+        .map_err(|_| FixtureError::InvalidModelMarker)?;
+    if marker.schema != "synthetic-model-fixture/1"
+        || marker.model_id.is_empty()
+        || marker.revision.is_empty()
+        || marker.private_data
+        || marker.product_evidence
+        || marker.note
+            != "Public model bytes copied from a verified catalog entry for synthetic fixture review."
+    {
+        return Err(FixtureError::InvalidModelMarker);
+    }
+    Ok(())
+}
+
 fn validate_install_root(root: &Path, repository: &Path) -> Result<(), FixtureError> {
     if !root.is_absolute() || root.file_name().and_then(|name| name.to_str()) != Some(BUNDLE_NAME) {
         return Err(FixtureError::WrongRootName);
@@ -451,36 +765,7 @@ fn validate_install_root(root: &Path, repository: &Path) -> Result<(), FixtureEr
     if root.starts_with(&repository) || parent.starts_with(&repository) {
         return Err(FixtureError::InsideRepository);
     }
-    let marker_path = root.join("SYNTHETIC_FIXTURE.json");
-    let marker_metadata =
-        fs::symlink_metadata(&marker_path).map_err(|_| FixtureError::InvalidMarker)?;
-    if marker_metadata.file_type().is_symlink()
-        || !marker_metadata.file_type().is_file()
-        || marker_metadata.permissions().mode() & 0o777 != 0o600
-    {
-        return Err(FixtureError::InvalidMarker);
-    }
-    let marker: SyntheticFixtureMarker = serde_json::from_slice(&fs::read(&marker_path)?)
-        .map_err(|_| FixtureError::InvalidMarker)?;
-    if marker.schema != "synthetic-fixture-evidence/1"
-        || marker.bundle != BUNDLE_NAME
-        || marker.private_data
-        || marker.product_evidence
-        || marker.content != "deterministic invented review fixture"
-        || marker.meeting_id != MEETING_ID
-        || marker.retry_operation_id != OPERATION_ID
-        || marker.covered_states
-            != vec![
-                "retained meeting",
-                "verified audio",
-                "quality and device projections",
-                "pending transcript retry",
-            ]
-        || marker.note
-            != "No generated note is seeded; this fixture remains TranscriptReady and does not invoke a note worker."
-    {
-        return Err(FixtureError::InvalidMarker);
-    }
+    validate_synthetic_marker(root)?;
     if fs::symlink_metadata(root.join("MODEL_FIXTURE.json")).is_ok() {
         return Err(FixtureError::ExistingModel);
     }
@@ -651,12 +936,12 @@ mod tests {
     use tempfile::TempDir;
 
     use local_meeting_notes_session_core::capture_quality::{
-        project_capture_quality, project_recording_device, CaptureQualityObservationKind,
-        CaptureQualityObservationStatus, CaptureQualityState, RecordingDeviceState,
+        CaptureQualityObservationKind, CaptureQualityObservationStatus, CaptureQualityState,
+        RecordingDeviceState, project_capture_quality, project_recording_device,
     };
     use local_meeting_notes_session_core::meeting::verify_artifact_ref;
     use local_meeting_notes_session_core::model_store::{
-        active_model, ModelCatalogSchema, TranscriptModel, TranscriptModelFile,
+        ModelCatalogSchema, TranscriptModel, TranscriptModelFile, active_model,
     };
     use local_meeting_notes_session_core::transcript_retry::TranscriptRetryState;
     use std::os::unix::fs::PermissionsExt;
@@ -765,6 +1050,232 @@ mod tests {
         assert_eq!(data_bytes, AUDIO_FRAMES * 2);
         assert_eq!(bytes.len(), 44 + data_bytes);
         assert!(bytes[44..].iter().all(|sample| *sample == 0));
+    }
+
+    fn archive_target(temp: &TempDir, label: &str) -> PathBuf {
+        temp.path().join(format!("{BUNDLE_NAME}.archive-{label}"))
+    }
+
+    fn model_marker_bytes() -> Vec<u8> {
+        serde_json::to_vec_pretty(&json!({
+            "schema": "synthetic-model-fixture/1",
+            "model_id": "fixture-model",
+            "revision": "fixture-revision",
+            "private_data": false,
+            "product_evidence": false,
+            "note": "Public model bytes copied from a verified catalog entry for synthetic fixture review."
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn archive_moves_fixture_and_preserves_marker_and_model_bytes() {
+        let temp = TempDir::new().unwrap();
+        let root = target(&temp);
+        let repository = repo(&temp);
+        seed(&root, repository.clone()).unwrap();
+        let model = model_marker_bytes();
+        fs::write(root.join("MODEL_FIXTURE.json"), &model).unwrap();
+        fs::set_permissions(
+            root.join("MODEL_FIXTURE.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        let marker = fs::read(root.join("SYNTHETIC_FIXTURE.json")).unwrap();
+        let archive_root = archive_target(&temp, "review-1");
+
+        archive(&root, &archive_root, repository).unwrap();
+
+        assert!(!root.exists());
+        assert_eq!(
+            fs::read(archive_root.join("SYNTHETIC_FIXTURE.json")).unwrap(),
+            marker
+        );
+        assert_eq!(
+            fs::read(archive_root.join("MODEL_FIXTURE.json")).unwrap(),
+            model
+        );
+    }
+
+    #[test]
+    fn archive_works_without_model_marker() {
+        let temp = TempDir::new().unwrap();
+        let root = target(&temp);
+        let repository = repo(&temp);
+        seed(&root, repository.clone()).unwrap();
+        let archive_root = archive_target(&temp, "no-model");
+
+        archive(&root, &archive_root, repository).unwrap();
+
+        assert!(!root.exists());
+        assert!(archive_root.join("SYNTHETIC_FIXTURE.json").is_file());
+        assert!(!archive_root.join("MODEL_FIXTURE.json").exists());
+    }
+
+    #[test]
+    fn archive_refuses_invalid_destination_and_source_contracts() {
+        let cases = [
+            ("wrong", FixtureError::WrongArchiveName),
+            (
+                "com.ninochavez.local-meeting-notes.fixture.archive-",
+                FixtureError::WrongArchiveName,
+            ),
+            (
+                "com.ninochavez.local-meeting-notes.fixture.archive-a_b",
+                FixtureError::WrongArchiveName,
+            ),
+        ];
+        for (name, expected) in cases {
+            let temp = TempDir::new().unwrap();
+            let root = target(&temp);
+            let repository = repo(&temp);
+            seed(&root, repository.clone()).unwrap();
+            assert!(matches!(
+                archive(&root, &temp.path().join(name), repository),
+                Err(error) if std::mem::discriminant(&error) == std::mem::discriminant(&expected)
+            ));
+        }
+
+        let temp = TempDir::new().unwrap();
+        let root = target(&temp);
+        let repository = repo(&temp);
+        seed(&root, repository.clone()).unwrap();
+        let existing = archive_target(&temp, "existing");
+        create_private_dir(&existing).unwrap();
+        assert!(matches!(
+            archive(&root, &existing, repository.clone()),
+            Err(FixtureError::ExistingArchiveRoot)
+        ));
+
+        let linked = archive_target(&temp, "linked");
+        symlink(temp.path(), &linked).unwrap();
+        assert!(matches!(
+            archive(&root, &linked, repository.clone()),
+            Err(FixtureError::ExistingArchiveRoot)
+        ));
+
+        fs::write(root.join("SYNTHETIC_FIXTURE.json"), b"{}").unwrap();
+        fs::set_permissions(
+            root.join("SYNTHETIC_FIXTURE.json"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        assert!(matches!(
+            archive(&root, &archive_target(&temp, "bad-marker"), repository),
+            Err(FixtureError::InvalidMarker)
+        ));
+    }
+
+    #[test]
+    fn archive_refuses_wrong_location_repository_and_broad_paths() {
+        let temp = TempDir::new().unwrap();
+        let root = target(&temp);
+        let repository = repo(&temp);
+        seed(&root, repository.clone()).unwrap();
+        let other_parent = temp.path().join("other");
+        create_private_dir(&other_parent).unwrap();
+        assert!(
+            archive(
+                &root,
+                &other_parent.join(format!("{BUNDLE_NAME}.archive-other")),
+                repository.clone()
+            )
+            .is_err()
+        );
+        assert!(
+            archive(
+                &root,
+                &repository.join(format!("{BUNDLE_NAME}.archive-repository")),
+                repository.clone()
+            )
+            .is_err()
+        );
+        assert!(
+            archive(
+                &root,
+                &Path::new("/tmp").join(format!("{BUNDLE_NAME}.archive-broad")),
+                repository
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn exclusive_archive_publish_never_replaces_an_empty_destination() {
+        let temp = TempDir::new().unwrap();
+        let root = target(&temp);
+        let repository = repo(&temp);
+        seed(&root, repository.clone()).unwrap();
+        let archive_root = archive_target(&temp, "already-created");
+        create_private_dir(&archive_root).unwrap();
+        let parent = temp.path().canonicalize().unwrap();
+
+        let result = rename_fixture_exclusive(
+            &parent,
+            BUNDLE_NAME,
+            archive_root.file_name().unwrap().to_str().unwrap(),
+        );
+
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        assert!(root.is_dir());
+        assert!(archive_root.is_dir());
+        assert!(archive_root.read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn archive_refuses_contended_writer_lock_without_mutation() {
+        let temp = TempDir::new().unwrap();
+        let root = target(&temp);
+        let repository = repo(&temp);
+        seed(&root, repository.clone()).unwrap();
+        let storage = StorageRoot::create(&root, &repository).unwrap();
+        let _writer = AppDataWriterLock::acquire(&storage).unwrap();
+        let marker = fs::read(root.join("SYNTHETIC_FIXTURE.json")).unwrap();
+        let archive_root = archive_target(&temp, "contended");
+
+        assert!(matches!(
+            archive(&root, &archive_root, repository),
+            Err(FixtureError::WriterLock(AppDataWriterLockError::Contended))
+        ));
+        assert!(root.is_dir());
+        assert!(!archive_root.exists());
+        assert_eq!(
+            fs::read(root.join("SYNTHETIC_FIXTURE.json")).unwrap(),
+            marker
+        );
+    }
+
+    #[test]
+    fn archive_refuses_wrong_root_and_model_marker_modes() {
+        let temp = TempDir::new().unwrap();
+        let root = target(&temp);
+        let repository = repo(&temp);
+        seed(&root, repository.clone()).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(matches!(
+            archive(&root, &archive_target(&temp, "wrong-root-mode"), repository),
+            Err(FixtureError::UnsafeDirectory)
+        ));
+
+        let temp = TempDir::new().unwrap();
+        let root = target(&temp);
+        let repository = repo(&temp);
+        seed(&root, repository.clone()).unwrap();
+        fs::write(root.join("MODEL_FIXTURE.json"), model_marker_bytes()).unwrap();
+        fs::set_permissions(
+            root.join("MODEL_FIXTURE.json"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        assert!(matches!(
+            archive(
+                &root,
+                &archive_target(&temp, "wrong-model-mode"),
+                repository
+            ),
+            Err(FixtureError::InvalidModelMarker)
+        ));
     }
 
     fn snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
