@@ -307,6 +307,26 @@ export function withheldTurnPresentation(
     : null;
 }
 
+// Vocabulary is a review-layer control, not an app-wide setting. The browser
+// only opens it from a stable, retained meeting projection; the command repeats
+// this check before it reads or changes the local store.
+export function localVocabularyPresentation({
+  meetingId = "",
+  transcriptMeetingId = "",
+  transcriptSha256 = "",
+  capture = "idle",
+} = {}) {
+  const digest = typeof transcriptSha256 === "string" ? transcriptSha256.trim() : "";
+  const valid = typeof meetingId === "string"
+    && meetingId.length > 0
+    && transcriptMeetingId === meetingId
+    && /^[a-f0-9]{64}$/i.test(digest)
+    && capture === "idle";
+  return valid
+    ? { action: "open-vocabulary", label: "Vocabulary", meetingId, sourceTranscriptSha256: digest }
+    : null;
+}
+
 // The generate control renders only from the note response's own eligibility
 // signal — the backend includes the source pin exactly when the facade would
 // admit the operation, so the browser never re-derives lifecycle rules. The

@@ -5,6 +5,7 @@ import {
   captureIsInProgress,
   capturePresentation,
   humanize,
+  localVocabularyPresentation,
   meetingRecoveryPresentation,
   meetingNotePresentation,
   mergePermissions,
@@ -48,6 +49,7 @@ const state = {
   snapshot: null,
   speakerCorrection: null,
   speakerCorrectionDraft: "",
+  vocabulary: null,
   transcriptActionStatus: {},
   transcriptQuery: "",
 };
@@ -168,6 +170,7 @@ function render() {
       ${state.modal === "start" ? renderStartSheet() : ""}
       ${state.modal === "rename-meeting" ? renderRenameMeetingSheet() : ""}
       ${state.modal === "speaker-correction" ? renderSpeakerCorrectionSheet() : ""}
+      ${state.modal === "vocabulary" ? renderVocabularySheet() : ""}
       ${["delete-recording", "delete-transcript", "delete-meeting"].includes(state.modal) ? renderMeetingDeletionSheet() : ""}
       ${state.notice ? `<aside class="toast toast-notice" role="status"><button type="button" data-action="clear-notice" aria-label="Dismiss">×</button>${escapeHtml(state.notice)}</aside>` : ""}
       ${state.error ? `<aside class="toast" role="alert"><button type="button" data-action="clear-error" aria-label="Dismiss">×</button>${escapeHtml(state.error)}</aside>` : ""}
@@ -183,7 +186,7 @@ function render() {
 function captureEditorFocus() {
   const active = document.activeElement;
   const field = active?.dataset?.field;
-  if (!["operator-note", "library-operator-note", "transcript-search"].includes(field)) return null;
+  if (!["operator-note", "library-operator-note", "transcript-search", "vocabulary-before", "vocabulary-after"].includes(field)) return null;
   if (!active.dataset.meetingId) return null;
   return {
     field,
@@ -454,6 +457,14 @@ function renderTranscript(turns, title, detail = "", { copyAction = "", openFile
   const fileBusy = state.busyAction === openFileAction;
   const query = workspace ? state.transcriptQuery.trim() : "";
   const visibleTurns = workspace ? transcriptTurnsMatching(turns, query) : turns;
+  const vocabulary = workspace
+    ? localVocabularyPresentation({
+      meetingId: state.selected?.row?.meetingId,
+      transcriptMeetingId: state.selected?.transcript?.meetingId,
+      transcriptSha256: state.selected?.transcript?.currentTranscriptSha256,
+      capture: state.snapshot?.capture,
+    })
+    : null;
   const actions = copyAction || openFileAction ? `<div class="transcript-actions" aria-label="Transcript actions">
     ${copyAction ? `<button class="button button-quiet button-small" type="button" data-action="${copyAction}" ${copyBusy ? "disabled" : ""}>${copyBusy ? "Copying…" : "Copy transcript"}</button>` : ""}
     ${openFileAction ? `<button class="button button-quiet button-small" type="button" data-action="${openFileAction}" ${fileBusy ? "disabled" : ""}>${fileBusy ? "Opening…" : "Open transcript file"}</button>` : ""}
@@ -497,7 +508,10 @@ function renderTranscript(turns, title, detail = "", { copyAction = "", openFile
       <section class="transcript-panel transcript-workspace" aria-labelledby="transcript-heading">
         <div class="transcript-workspace-toolbar">
           <div class="transcript-heading"><h3 id="transcript-heading">${escapeHtml(title)}</h3>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div>
-          ${actions}
+          <div class="transcript-workspace-actions">
+            ${vocabulary ? `<button class="button button-quiet button-small" type="button" data-action="${vocabulary.action}">${vocabulary.label}</button>` : ""}
+            ${actions}
+          </div>
         </div>
         <div class="transcript-search-row">
           <label class="screen-reader-only" for="transcript-search-input">Find in transcript</label>
@@ -831,6 +845,191 @@ async function saveSpeakerCorrection() {
     state.speakerCorrectionDraft = "";
     state.notice = response.message || "Speaker name saved on this Mac.";
     await reopenSelectedMeeting(selection.row.meetingId);
+  });
+}
+
+function vocabularyContext() {
+  return localVocabularyPresentation({
+    meetingId: state.selected?.row?.meetingId,
+    transcriptMeetingId: state.selected?.transcript?.meetingId,
+    transcriptSha256: state.selected?.transcript?.currentTranscriptSha256,
+    capture: state.snapshot?.capture,
+  });
+}
+
+function resetVocabularyDraft() {
+  if (!state.vocabulary) return;
+  state.vocabulary = {
+    ...state.vocabulary,
+    editingId: "",
+    sourcePhrase: "",
+    preferredReplacement: "",
+  };
+}
+
+function closeModal() {
+  state.modal = "";
+  state.speakerCorrection = null;
+  state.speakerCorrectionDraft = "";
+  state.vocabulary = null;
+}
+
+async function openVocabulary() {
+  const context = vocabularyContext();
+  if (!context) return;
+  state.vocabulary = {
+    ...context,
+    entries: [],
+    editingId: "",
+    sourcePhrase: "",
+    preferredReplacement: "",
+    loading: true,
+  };
+  state.modal = "vocabulary";
+  render();
+  queueMicrotask(() => root.querySelector("#vocabulary-before-input")?.focus());
+  await refreshVocabulary();
+}
+
+async function refreshVocabulary() {
+  const vocabulary = state.vocabulary;
+  if (!vocabulary) return;
+  state.vocabulary = { ...vocabulary, loading: true };
+  render();
+  try {
+    const response = await invoke("local_vocabulary_list", {
+      meetingId: vocabulary.meetingId,
+      sourceTranscriptSha256: vocabulary.sourceTranscriptSha256,
+    });
+    if (state.vocabulary !== vocabulary && state.vocabulary?.meetingId !== vocabulary.meetingId) return;
+    state.vocabulary = { ...state.vocabulary, entries: response.entries || [], loading: false };
+  } catch (error) {
+    if (state.vocabulary?.meetingId === vocabulary.meetingId) {
+      state.vocabulary = { ...state.vocabulary, loading: false };
+    }
+    reportError(error);
+    return;
+  }
+  render();
+}
+
+function renderVocabularySheet() {
+  const vocabulary = state.vocabulary;
+  if (!vocabulary) return "";
+  const editing = vocabulary.entries?.find((entry) => entry.id === vocabulary.editingId);
+  const saving = state.busyAction === "vocabulary-save";
+  const rows = vocabulary.entries?.length
+    ? vocabulary.entries.map((entry) => {
+      const count = Number(entry.appliedTurnCount) || 0;
+      const use = `${count} ${count === 1 ? "use" : "uses"} in this meeting`;
+      return `
+        <li class="vocabulary-ledger-row" data-enabled="${entry.enabled ? "true" : "false"}">
+          <div class="vocabulary-ledger-terms"><span>${escapeHtml(entry.sourcePhrase)}</span><span aria-hidden="true">→</span><strong>${escapeHtml(entry.preferredReplacement)}</strong></div>
+          <div class="vocabulary-ledger-meta"><span>${entry.enabled ? "Enabled" : "Disabled"}</span><span>${escapeHtml(use)}</span></div>
+          <div class="vocabulary-ledger-actions">
+            <button class="text-button" type="button" data-action="edit-vocabulary" data-vocabulary-id="${escapeHtml(entry.id)}">Edit</button>
+            <button class="text-button" type="button" data-action="toggle-vocabulary" data-vocabulary-id="${escapeHtml(entry.id)}">${entry.enabled ? "Disable" : "Enable"}</button>
+            <button class="text-button vocabulary-delete" type="button" data-action="delete-vocabulary" data-vocabulary-id="${escapeHtml(entry.id)}">Delete</button>
+          </div>
+        </li>
+      `;
+    }).join("")
+    : `<li class="vocabulary-ledger-empty">${vocabulary.loading ? "Checking saved replacements…" : "No local replacements yet. Add an exact Before → After correction below."}</li>`;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="start-sheet vocabulary-sheet" role="dialog" aria-modal="true" aria-labelledby="vocabulary-sheet-title">
+        <div class="sheet-head">
+          <div><p class="eyebrow">Transcript vocabulary</p><h2 id="vocabulary-sheet-title">Keep exact words consistent.</h2><p>These local Before → After replacements apply to future review projections and note regenerations. They do not rewrite this transcript or regenerate a note.</p></div>
+          <button class="icon-button" type="button" data-action="close-modal" aria-label="Close vocabulary">×</button>
+        </div>
+        <section class="vocabulary-ledger" aria-labelledby="vocabulary-ledger-title">
+          <div class="vocabulary-ledger-head"><h3 id="vocabulary-ledger-title">Correction ledger</h3><span>${vocabulary.entries?.length || 0} saved</span></div>
+          <ul>${rows}</ul>
+        </section>
+        <form data-form="vocabulary">
+          <div class="vocabulary-form-head"><h3>${editing ? "Edit replacement" : "Add replacement"}</h3>${editing ? `<button class="text-button" type="button" data-action="cancel-vocabulary-edit">Cancel edit</button>` : ""}</div>
+          <div class="vocabulary-fields">
+            <label class="field-label" for="vocabulary-before-input">Before
+              <input class="meeting-title-input" id="vocabulary-before-input" data-field="vocabulary-before" data-meeting-id="${escapeHtml(vocabulary.meetingId)}" maxlength="256" value="${escapeHtml(vocabulary.sourcePhrase)}" placeholder="Exact transcript spelling" autocomplete="off" />
+            </label>
+            <span class="vocabulary-arrow" aria-hidden="true">→</span>
+            <label class="field-label" for="vocabulary-after-input">After
+              <input class="meeting-title-input" id="vocabulary-after-input" data-field="vocabulary-after" data-meeting-id="${escapeHtml(vocabulary.meetingId)}" maxlength="256" value="${escapeHtml(vocabulary.preferredReplacement)}" placeholder="Preferred spelling" autocomplete="off" />
+            </label>
+          </div>
+          <p class="vocabulary-help">Exact, case-sensitive matches only. Each phrase can be up to 256 characters.</p>
+          <div class="sheet-actions">
+            <button class="button button-quiet" type="button" data-action="close-modal">Close</button>
+            <button class="button button-primary" type="submit" ${saving || !vocabulary.sourcePhrase.trim() || !vocabulary.preferredReplacement.trim() ? "disabled" : ""}>${saving ? "Saving…" : editing ? "Save replacement" : "Add replacement"}</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+async function saveVocabulary() {
+  const vocabulary = state.vocabulary;
+  if (!vocabulary || !vocabulary.sourcePhrase.trim() || !vocabulary.preferredReplacement.trim()) return;
+  const command = vocabulary.editingId ? "local_vocabulary_edit" : "local_vocabulary_add";
+  const payload = {
+    meetingId: vocabulary.meetingId,
+    sourceTranscriptSha256: vocabulary.sourceTranscriptSha256,
+    sourcePhrase: vocabulary.sourcePhrase.trim(),
+    preferredReplacement: vocabulary.preferredReplacement.trim(),
+  };
+  if (vocabulary.editingId) payload.id = vocabulary.editingId;
+  await runBusy("vocabulary-save", async () => {
+    const response = await invoke(command, payload);
+    if (state.vocabulary?.meetingId !== vocabulary.meetingId) return;
+    state.vocabulary = { ...state.vocabulary, entries: response.entries || [], loading: false };
+    resetVocabularyDraft();
+    state.notice = "Local vocabulary saved. Future note regenerations will use it.";
+  });
+}
+
+function editVocabulary(id) {
+  const entry = state.vocabulary?.entries?.find((candidate) => candidate.id === id);
+  if (!entry || !state.vocabulary) return;
+  state.vocabulary = {
+    ...state.vocabulary,
+    editingId: id,
+    sourcePhrase: entry.sourcePhrase,
+    preferredReplacement: entry.preferredReplacement,
+  };
+  render();
+  queueMicrotask(() => root.querySelector("#vocabulary-before-input")?.focus());
+}
+
+async function setVocabularyEnabled(id, enabled) {
+  const vocabulary = state.vocabulary;
+  if (!vocabulary) return;
+  await runBusy("vocabulary-save", async () => {
+    const response = await invoke("local_vocabulary_set_enabled", {
+      meetingId: vocabulary.meetingId,
+      sourceTranscriptSha256: vocabulary.sourceTranscriptSha256,
+      id,
+      enabled,
+    });
+    if (state.vocabulary?.meetingId === vocabulary.meetingId) {
+      state.vocabulary = { ...state.vocabulary, entries: response.entries || [], loading: false };
+    }
+  });
+}
+
+async function deleteVocabulary(id) {
+  const vocabulary = state.vocabulary;
+  if (!vocabulary) return;
+  await runBusy("vocabulary-save", async () => {
+    const response = await invoke("local_vocabulary_delete", {
+      meetingId: vocabulary.meetingId,
+      sourceTranscriptSha256: vocabulary.sourceTranscriptSha256,
+      id,
+    });
+    if (state.vocabulary?.meetingId === vocabulary.meetingId) {
+      state.vocabulary = { ...state.vocabulary, entries: response.entries || [], loading: false };
+      if (state.vocabulary.editingId === id) resetVocabularyDraft();
+    }
   });
 }
 
@@ -1458,9 +1657,7 @@ function handleClick(event) {
   if (action === "home" || action === "meetings") void openMeetings();
   else if (action === "open-start") openStart();
   else if (action === "close-start" || action === "close-modal") {
-    state.modal = "";
-    state.speakerCorrection = null;
-    state.speakerCorrectionDraft = "";
+    closeModal();
     render();
   }
   else if (action === "start-recording") void startRecording();
@@ -1469,6 +1666,18 @@ function handleClick(event) {
   else if (action === "record-another") void recordAnother();
   else if (action === "open-meeting") void openMeeting(control.dataset.handle);
   else if (action === "open-speaker-correction") openSpeakerCorrection(Number(control.dataset.sourceTurnIndex));
+  else if (action === "open-vocabulary") void openVocabulary();
+  else if (action === "edit-vocabulary") editVocabulary(control.dataset.vocabularyId);
+  else if (action === "cancel-vocabulary-edit") {
+    resetVocabularyDraft();
+    render();
+    queueMicrotask(() => root.querySelector("#vocabulary-before-input")?.focus());
+  }
+  else if (action === "toggle-vocabulary") {
+    const entry = state.vocabulary?.entries?.find((candidate) => candidate.id === control.dataset.vocabularyId);
+    if (entry) void setVocabularyEnabled(entry.id, !entry.enabled);
+  }
+  else if (action === "delete-vocabulary") void deleteVocabulary(control.dataset.vocabularyId);
   else if (action === "restore-withheld-turn") void restoreSelectedWithheldTurn(Number(control.dataset.sourceTurnIndex));
   else if (action === "use-source-speaker" && state.speakerCorrection) {
     state.speakerCorrectionDraft = state.speakerCorrection.sourceLabel;
@@ -1537,6 +1746,12 @@ function handleInput(event) {
   if (event.target.dataset.field === "speaker-name") {
     state.speakerCorrectionDraft = event.target.value;
   }
+  if (event.target.dataset.field === "vocabulary-before" && state.vocabulary) {
+    state.vocabulary = { ...state.vocabulary, sourcePhrase: event.target.value };
+  }
+  if (event.target.dataset.field === "vocabulary-after" && state.vocabulary) {
+    state.vocabulary = { ...state.vocabulary, preferredReplacement: event.target.value };
+  }
 }
 
 function handleChange(event) {
@@ -1554,9 +1769,7 @@ function handleChange(event) {
 
 function handleKeydown(event) {
   if (event.key === "Escape" && state.modal) {
-    state.modal = "";
-    state.speakerCorrection = null;
-    state.speakerCorrectionDraft = "";
+    closeModal();
     render();
     return;
   }
@@ -1574,10 +1787,11 @@ function handleKeydown(event) {
 
 function handleSubmit(event) {
   const form = event.target.dataset.form;
-  if (!["rename-meeting", "speaker-correction"].includes(form)) return;
+  if (!["rename-meeting", "speaker-correction", "vocabulary"].includes(form)) return;
   event.preventDefault();
   if (form === "rename-meeting") void saveMeetingTitle();
-  else void saveSpeakerCorrection();
+  else if (form === "speaker-correction") void saveSpeakerCorrection();
+  else void saveVocabulary();
 }
 
 async function initialize() {

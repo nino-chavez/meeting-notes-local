@@ -303,6 +303,36 @@
           "markdownDescription": "Enables the library_snapshot command without any pre-configured scope."
         },
         {
+          "description": "Enables the local_vocabulary_add command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-vocabulary-add",
+          "markdownDescription": "Enables the local_vocabulary_add command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_vocabulary_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-vocabulary-delete",
+          "markdownDescription": "Enables the local_vocabulary_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_vocabulary_edit command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-vocabulary-edit",
+          "markdownDescription": "Enables the local_vocabulary_edit command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_vocabulary_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-vocabulary-list",
+          "markdownDescription": "Enables the local_vocabulary_list command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_vocabulary_set_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-vocabulary-set-enabled",
+          "markdownDescription": "Enables the local_vocabulary_set_enabled command without any pre-configured scope."
+        },
+        {
           "description": "Enables the note_model_settings command without any pre-configured scope.",
           "type": "string",
           "const": "allow-note-model-settings",
@@ -625,6 +655,36 @@
           "type": "string",
           "const": "deny-library-snapshot",
           "markdownDescription": "Denies the library_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_vocabulary_add command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-vocabulary-add",
+          "markdownDescription": "Denies the local_vocabulary_add command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_vocabulary_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-vocabulary-delete",
+          "markdownDescription": "Denies the local_vocabulary_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_vocabulary_edit command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-vocabulary-edit",
+          "markdownDescription": "Denies the local_vocabulary_edit command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_vocabulary_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-vocabulary-list",
+          "markdownDescription": "Denies the local_vocabulary_list command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_vocabulary_set_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-vocabulary-set-enabled",
+          "markdownDescription": "Denies the local_vocabulary_set_enabled command without any pre-configured scope."
         },
         {
           "description": "Denies the note_model_settings command without any pre-configured scope.",

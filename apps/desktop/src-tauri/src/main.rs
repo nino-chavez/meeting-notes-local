@@ -5123,6 +5123,202 @@ struct SpeakerCorrectionResponse {
     message: String,
 }
 
+/// A private, exact vocabulary row together with its use in the meeting the
+/// operator is currently reviewing. The count is derived from the verified
+/// projection below; it never records a new transcript derivative.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalVocabularyEntryResponse {
+    id: Uuid,
+    source_phrase: String,
+    preferred_replacement: String,
+    enabled: bool,
+    applied_turn_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalVocabularySheetResponse {
+    entries: Vec<LocalVocabularyEntryResponse>,
+}
+
+fn local_vocabulary_error(
+    error: local_meeting_notes_session_core::local_vocabulary::LocalVocabularyError,
+) -> String {
+    use local_meeting_notes_session_core::local_vocabulary::LocalVocabularyError;
+
+    match error {
+        LocalVocabularyError::DuplicateSourcePhrase => {
+            "That Before phrase already has a replacement. Edit the existing row instead.".into()
+        }
+        LocalVocabularyError::NotFound => {
+            "That replacement is no longer available. Reopen Vocabulary and try again.".into()
+        }
+        LocalVocabularyError::TooManyEntries => {
+            "You can save up to 256 local replacements.".into()
+        }
+        LocalVocabularyError::InvalidEntry(_) => {
+            "Use two different single-line phrases, up to 256 characters each.".into()
+        }
+        LocalVocabularyError::TextTooLarge | LocalVocabularyError::TooManyRangeReplacements => {
+            "Yawn could not safely check this transcript against local vocabulary. Nothing changed. Reopen the meeting and try again.".into()
+        }
+        LocalVocabularyError::DocumentTooLarge => {
+            "Your saved vocabulary is over its 256 KB limit. Nothing changed.".into()
+        }
+        LocalVocabularyError::InvalidPrivateStorage
+        | LocalVocabularyError::Malformed(_)
+        | LocalVocabularyError::Io(_)
+        | LocalVocabularyError::Json(_) => {
+            "Your saved vocabulary could not be read. Nothing changed. Reopen the meeting and try again.".into()
+        }
+    }
+}
+
+fn with_current_local_vocabulary<T>(
+    meeting_id: Uuid,
+    source_transcript_sha256: &str,
+    state: &ApplicationState,
+    operation: impl FnOnce(
+        &local_meeting_notes_session_core::local_vocabulary::LocalVocabularyStore,
+        &[TranscriptTurn],
+    ) -> Result<T, String>,
+) -> Result<T, String> {
+    let _command = state
+        .command_lock
+        .lock()
+        .map_err(|_| "Vocabulary is unavailable. Reopen the meeting and try again.")?;
+    if sitting_task_active(state) {
+        return Err("Finish the setup recording before changing local vocabulary.".into());
+    }
+    {
+        let model = state
+            .model
+            .lock()
+            .map_err(|_| "Vocabulary is unavailable. Reopen the meeting and try again.")?;
+        if model.reducer.startup() != StartupState::Ready || model.reducer.capture() != CaptureState::Idle {
+            return Err("Finish the current recording before changing local vocabulary.".into());
+        }
+    }
+    let storage = preview_storage_clone(state)
+        .map_err(|_| "Local meeting storage is unavailable. Reopen the app and try again.")?;
+    let coordination = state.meeting_storage_coordination()?;
+    let _lease = coordination
+        .acquire(&meeting_id.to_string())
+        .map_err(|_| "Another action is using this meeting. Reopen it and try again.")?;
+    let directory = meeting_dir(&storage, &meeting_id.to_string()).map_err(error_text)?;
+    let meeting = load_meeting(&directory).map_err(error_text)?;
+    let current = meeting
+        .artifacts
+        .current_transcript
+        .as_ref()
+        .ok_or_else(|| "This meeting no longer has a retained transcript.".to_string())?;
+    if meeting.meeting_id != meeting_id.to_string() || current.sha256 != source_transcript_sha256 {
+        return Err("The transcript changed. Reopen the meeting and try again.".into());
+    }
+    let (turns, _) = load_transcript_projection(&directory, &meeting_id.to_string(), current)?;
+    let vocabulary = local_meeting_notes_session_core::local_vocabulary::LocalVocabularyStore::open(&storage)
+        .map_err(local_vocabulary_error)?;
+    operation(&vocabulary, &turns)
+}
+
+fn local_vocabulary_sheet_response(
+    vocabulary: &local_meeting_notes_session_core::local_vocabulary::LocalVocabularyStore,
+    turns: &[TranscriptTurn],
+) -> Result<LocalVocabularySheetResponse, String> {
+    let entries = vocabulary.list().map_err(local_vocabulary_error)?;
+    // A withheld row is deliberately an empty source input even if a later
+    // parser change were to carry text in memory. It cannot affect a count.
+    let source_turns = turns
+        .iter()
+        .map(|turn| if turn.withheld { "" } else { turn.text.as_str() })
+        .collect::<Vec<_>>();
+    let applications = vocabulary.project_turns(&source_turns).map_err(local_vocabulary_error)?;
+    let mut applied_by_entry = HashMap::<Uuid, usize>::new();
+    for application in applications {
+        *applied_by_entry.entry(application.entry_id).or_default() += 1;
+    }
+    Ok(LocalVocabularySheetResponse {
+        entries: entries
+            .into_iter()
+            .map(|entry| LocalVocabularyEntryResponse {
+                id: entry.id,
+                source_phrase: entry.source_phrase,
+                preferred_replacement: entry.preferred_replacement,
+                enabled: entry.enabled,
+                applied_turn_count: applied_by_entry.remove(&entry.id).unwrap_or(0),
+            })
+            .collect(),
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn local_vocabulary_list(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    state: State<'_, ApplicationState>,
+) -> Result<LocalVocabularySheetResponse, String> {
+    with_current_local_vocabulary(meeting_id, &source_transcript_sha256, &state, |vocabulary, turns| {
+        local_vocabulary_sheet_response(vocabulary, turns)
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn local_vocabulary_add(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    source_phrase: String,
+    preferred_replacement: String,
+    state: State<'_, ApplicationState>,
+) -> Result<LocalVocabularySheetResponse, String> {
+    with_current_local_vocabulary(meeting_id, &source_transcript_sha256, &state, |vocabulary, turns| {
+        vocabulary.add(&source_phrase, &preferred_replacement).map_err(local_vocabulary_error)?;
+        local_vocabulary_sheet_response(vocabulary, turns)
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn local_vocabulary_edit(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    id: Uuid,
+    source_phrase: String,
+    preferred_replacement: String,
+    state: State<'_, ApplicationState>,
+) -> Result<LocalVocabularySheetResponse, String> {
+    with_current_local_vocabulary(meeting_id, &source_transcript_sha256, &state, |vocabulary, turns| {
+        vocabulary.edit(id, &source_phrase, &preferred_replacement).map_err(local_vocabulary_error)?;
+        local_vocabulary_sheet_response(vocabulary, turns)
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn local_vocabulary_set_enabled(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    id: Uuid,
+    enabled: bool,
+    state: State<'_, ApplicationState>,
+) -> Result<LocalVocabularySheetResponse, String> {
+    with_current_local_vocabulary(meeting_id, &source_transcript_sha256, &state, |vocabulary, turns| {
+        vocabulary.set_enabled(id, enabled).map_err(local_vocabulary_error)?;
+        local_vocabulary_sheet_response(vocabulary, turns)
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn local_vocabulary_delete(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    id: Uuid,
+    state: State<'_, ApplicationState>,
+) -> Result<LocalVocabularySheetResponse, String> {
+    with_current_local_vocabulary(meeting_id, &source_transcript_sha256, &state, |vocabulary, turns| {
+        vocabulary.delete(id).map_err(local_vocabulary_error)?;
+        local_vocabulary_sheet_response(vocabulary, turns)
+    })
+}
+
 /// Saves one meeting-local speaker-name correction without rewriting the
 /// retained transcript. The source digest and original source label are both
 /// rechecked under the meeting lease, so a stale screen cannot rename a newer
@@ -5370,6 +5566,11 @@ fn main() {
             library_open_transcript,
             library_open_transcript_file,
             correct_speaker_name,
+            local_vocabulary_list,
+            local_vocabulary_add,
+            local_vocabulary_edit,
+            local_vocabulary_set_enabled,
+            local_vocabulary_delete,
             library_save_operator_note,
             preview_delete_meeting_audio,
             preview_delete_meeting_transcript,
@@ -9619,6 +9820,196 @@ mod tests {
             &state,
         )
         .is_err());
+    }
+
+    fn vocabulary_command_state(storage: &StorageRoot) -> ApplicationState {
+        let state = ApplicationState::default();
+        *state.storage.lock().unwrap() = Some(StorageContext {
+            storage: storage.clone(),
+            resource_root: PathBuf::new(),
+            manifest_path: PathBuf::new(),
+            diagnostics: PathBuf::new(),
+        });
+        ensure_app_data_writer_lock(&state, storage).unwrap();
+        let mut model = state.model.lock().unwrap();
+        transition_startup(&mut model, StartupState::Checking).unwrap();
+        transition_startup(&mut model, StartupState::Ready).unwrap();
+        drop(model);
+        state
+    }
+
+    #[test]
+    fn local_vocabulary_commands_persist_exact_counts_without_rewriting_transcript_bytes() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = Uuid::new_v4();
+        let transcript_path = write_transcript_fixture_with_turns(
+            &storage,
+            &meeting_id.to_string(),
+            10,
+            AudioState::Retained,
+            json!([
+                {"start": 0.0, "end": 1.0, "speaker": "Me", "text": "Kibbel Report and Kibbel"},
+                {"start": 1.0, "end": 2.0, "speaker": "Them", "text": "Kibbel private", "gated": true, "gate_score": 0.1, "gate_reason": "fixture"}
+            ]),
+        );
+        let directory = transcript_path.parent().unwrap().parent().unwrap();
+        let reference = load_meeting(directory)
+            .unwrap()
+            .artifacts
+            .current_transcript
+            .unwrap();
+        let source_digest = sha256_file(&transcript_path).unwrap();
+        assert_eq!(source_digest, reference.sha256);
+        let state = vocabulary_command_state(&storage);
+
+        let first = local_vocabulary_add_for_test(
+            meeting_id,
+            &reference.sha256,
+            "Kibbel",
+            "Kibble",
+            &state,
+        )
+        .unwrap();
+        assert_eq!(first.entries.len(), 1);
+        assert_eq!(first.entries[0].applied_turn_count, 2);
+        let first_id = first.entries[0].id;
+
+        let overlapped = local_vocabulary_add_for_test(
+            meeting_id,
+            &reference.sha256,
+            "Kibbel Report",
+            "Kibble report",
+            &state,
+        )
+        .unwrap();
+        assert_eq!(overlapped.entries.len(), 2);
+        assert_eq!(
+            overlapped
+                .entries
+                .iter()
+                .find(|entry| entry.id == first_id)
+                .unwrap()
+                .applied_turn_count,
+            1
+        );
+        let second_id = overlapped.entries[1].id;
+        assert_eq!(overlapped.entries[1].applied_turn_count, 1);
+
+        // A fresh process reads the same private store and re-derives the
+        // count from the immutable, digest-bound projection.
+        let restarted = vocabulary_command_state(&storage);
+        let after_restart = local_vocabulary_list_for_test(meeting_id, &reference.sha256, &restarted).unwrap();
+        assert_eq!(after_restart.entries.len(), 2);
+        assert_eq!(after_restart.entries[1].applied_turn_count, 1);
+
+        let edited = local_vocabulary_edit_for_test(
+            meeting_id,
+            &reference.sha256,
+            second_id,
+            "Report",
+            "Brief",
+            &restarted,
+        )
+        .unwrap();
+        assert_eq!(edited.entries[0].applied_turn_count, 2);
+        assert_eq!(edited.entries[1].applied_turn_count, 1);
+        let disabled = local_vocabulary_set_enabled_for_test(
+            meeting_id,
+            &reference.sha256,
+            first_id,
+            false,
+            &restarted,
+        )
+        .unwrap();
+        assert_eq!(disabled.entries.len(), 2, "disabled entries stay visible");
+        assert!(!disabled.entries[0].enabled);
+        assert_eq!(disabled.entries[0].applied_turn_count, 0);
+        let enabled = local_vocabulary_set_enabled_for_test(
+            meeting_id,
+            &reference.sha256,
+            first_id,
+            true,
+            &restarted,
+        )
+        .unwrap();
+        assert!(enabled.entries[0].enabled);
+        assert_eq!(enabled.entries[0].applied_turn_count, 2);
+        let deleted = local_vocabulary_delete_for_test(meeting_id, &reference.sha256, second_id, &restarted).unwrap();
+        assert_eq!(deleted.entries.len(), 1);
+        assert_eq!(sha256_file(&transcript_path).unwrap(), source_digest);
+
+        assert!(local_vocabulary_add_for_test(
+            meeting_id,
+            &"b".repeat(64),
+            "Other",
+            "Other preferred",
+            &restarted,
+        )
+        .is_err());
+
+        fs::write(storage.path().join("local-vocabulary.json"), b"not a vocabulary document").unwrap();
+        assert!(local_vocabulary_list_for_test(meeting_id, &reference.sha256, &restarted).is_err());
+        assert_eq!(sha256_file(&transcript_path).unwrap(), source_digest);
+    }
+
+    fn local_vocabulary_list_for_test(
+        meeting_id: Uuid,
+        digest: &str,
+        state: &ApplicationState,
+    ) -> Result<LocalVocabularySheetResponse, String> {
+        with_current_local_vocabulary(meeting_id, digest, state, local_vocabulary_sheet_response)
+    }
+
+    fn local_vocabulary_add_for_test(
+        meeting_id: Uuid,
+        digest: &str,
+        source: &str,
+        replacement: &str,
+        state: &ApplicationState,
+    ) -> Result<LocalVocabularySheetResponse, String> {
+        with_current_local_vocabulary(meeting_id, digest, state, |vocabulary, turns| {
+            vocabulary.add(source, replacement).map_err(local_vocabulary_error)?;
+            local_vocabulary_sheet_response(vocabulary, turns)
+        })
+    }
+
+    fn local_vocabulary_edit_for_test(
+        meeting_id: Uuid,
+        digest: &str,
+        id: Uuid,
+        source: &str,
+        replacement: &str,
+        state: &ApplicationState,
+    ) -> Result<LocalVocabularySheetResponse, String> {
+        with_current_local_vocabulary(meeting_id, digest, state, |vocabulary, turns| {
+            vocabulary.edit(id, source, replacement).map_err(local_vocabulary_error)?;
+            local_vocabulary_sheet_response(vocabulary, turns)
+        })
+    }
+
+    fn local_vocabulary_set_enabled_for_test(
+        meeting_id: Uuid,
+        digest: &str,
+        id: Uuid,
+        enabled: bool,
+        state: &ApplicationState,
+    ) -> Result<LocalVocabularySheetResponse, String> {
+        with_current_local_vocabulary(meeting_id, digest, state, |vocabulary, turns| {
+            vocabulary.set_enabled(id, enabled).map_err(local_vocabulary_error)?;
+            local_vocabulary_sheet_response(vocabulary, turns)
+        })
+    }
+
+    fn local_vocabulary_delete_for_test(
+        meeting_id: Uuid,
+        digest: &str,
+        id: Uuid,
+        state: &ApplicationState,
+    ) -> Result<LocalVocabularySheetResponse, String> {
+        with_current_local_vocabulary(meeting_id, digest, state, |vocabulary, turns| {
+            vocabulary.delete(id).map_err(local_vocabulary_error)?;
+            local_vocabulary_sheet_response(vocabulary, turns)
+        })
     }
 
     fn gated_document_with_voiceprint(voiceprint: &str) -> Vec<u8> {

@@ -1159,6 +1159,15 @@ h3 {
   margin: 0;
 }
 
+.transcript-workspace-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .transcript-search-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1525,6 +1534,154 @@ h3 {
   flex-wrap: wrap;
 }
 
+.vocabulary-sheet {
+  width: min(720px, 100%);
+}
+
+.vocabulary-ledger {
+  margin: 0 0 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.vocabulary-ledger-head,
+.vocabulary-ledger-row,
+.vocabulary-ledger-meta,
+.vocabulary-ledger-actions,
+.vocabulary-form-head {
+  display: flex;
+  align-items: center;
+}
+
+.vocabulary-ledger-head {
+  justify-content: space-between;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper-soft);
+}
+
+.vocabulary-ledger-head h3,
+.vocabulary-form-head h3 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: -0.01em;
+}
+
+.vocabulary-ledger-head > span {
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.vocabulary-ledger ul {
+  max-height: 270px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.vocabulary-ledger-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 16px;
+  padding: 12px 13px;
+  border-bottom: 1px solid var(--line);
+}
+
+.vocabulary-ledger-row:last-child {
+  border-bottom: 0;
+}
+
+.vocabulary-ledger-row[data-enabled="false"] {
+  color: var(--ink-faint);
+  background: var(--paper-soft);
+}
+
+.vocabulary-ledger-terms {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 13px;
+}
+
+.vocabulary-ledger-terms span:first-child,
+.vocabulary-ledger-terms strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vocabulary-ledger-terms span:nth-child(2) {
+  color: var(--ink-faint);
+}
+
+.vocabulary-ledger-terms strong {
+  color: var(--ink);
+  font-weight: 680;
+}
+
+.vocabulary-ledger-meta {
+  gap: 8px;
+  color: var(--ink-faint);
+  font-size: 11px;
+}
+
+.vocabulary-ledger-meta span:first-child {
+  color: var(--ink-soft);
+  font-weight: 650;
+}
+
+.vocabulary-ledger-row[data-enabled="false"] .vocabulary-ledger-meta span:first-child {
+  color: var(--attention);
+}
+
+.vocabulary-ledger-actions {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  gap: 14px;
+}
+
+.vocabulary-delete {
+  color: #a63d32;
+}
+
+.vocabulary-ledger-empty {
+  padding: 18px 13px;
+  color: var(--ink-faint);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.vocabulary-form-head {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.vocabulary-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: 10px;
+}
+
+.vocabulary-fields .field-label {
+  margin: 14px 0 0;
+}
+
+.vocabulary-arrow {
+  padding-bottom: 12px;
+  color: var(--ink-faint);
+}
+
+.vocabulary-help {
+  margin: 11px 0 20px;
+  color: var(--ink-faint);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .attestation-list {
   display: grid;
   gap: 7px;
@@ -1682,7 +1839,8 @@ h3 {
   .section-heading,
   .session-toolbar,
   .transcript-heading,
-  .transcript-workspace-toolbar {
+  .transcript-workspace-toolbar,
+  .transcript-workspace-actions {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -1760,6 +1918,34 @@ h3 {
   .transcript-scroll {
     padding-right: 14px;
     padding-left: 14px;
+  }
+
+  .vocabulary-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .vocabulary-arrow {
+    display: none;
+  }
+
+  .vocabulary-ledger-row {
+    grid-template-columns: 1fr;
+  }
+
+  .vocabulary-ledger-meta,
+  .vocabulary-ledger-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }
 

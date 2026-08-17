@@ -9,6 +9,7 @@ import {
   captureIsInProgress,
   capturePresentation,
   humanize,
+  localVocabularyPresentation,
   meetingRecoveryPresentation,
   meetingNotePresentation,
   mergePermissions,
@@ -188,6 +189,29 @@ test("a withheld turn gets one restore action only in the current idle meeting",
   }
   assert.equal(withheldTurnPresentation({ ...turn, sourceTurnIndex: 3.5 }, context), null);
   assert.equal(withheldTurnPresentation({ sourceTurnIndex: 3 }, context), null);
+});
+
+test("vocabulary only opens for the exact idle transcript projection", () => {
+  const eligible = {
+    meetingId: "m-1",
+    transcriptMeetingId: "m-1",
+    transcriptSha256: "a".repeat(64),
+    capture: "idle",
+  };
+  assert.deepEqual(localVocabularyPresentation(eligible), {
+    action: "open-vocabulary",
+    label: "Vocabulary",
+    meetingId: "m-1",
+    sourceTranscriptSha256: "a".repeat(64),
+  });
+  for (const invalid of [
+    { ...eligible, transcriptMeetingId: "m-2" },
+    { ...eligible, transcriptSha256: "stale" },
+    { ...eligible, capture: "recording" },
+    { meetingId: "m-1" },
+  ]) {
+    assert.equal(localVocabularyPresentation(invalid), null);
+  }
 });
 
 test("startup keeps polling until the app is ready", () => {
