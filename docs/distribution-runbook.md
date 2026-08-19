@@ -1,5 +1,28 @@
 # Yawn distribution runbook
 
+## 0.5.9 release receipt
+
+**0.5.9 was released on 2026-08-19 with queued local transcription between
+meetings.** The artifact was built from
+`d74b6ba599eaab23aa8502b9e2d0e8fdc40a2c7f`; PR #72 merged that source into
+`main` as `16e2650a96d1a18eff04efa21a7d5d17e4461c02`.
+
+The signed artifact is `Yawn-0.5.9-macos-arm64.dmg`, 348,709,396 bytes, with
+SHA-256 `e148ea3bcbee0764a340699fdd560f8f75c556c84ae7648210e5e0fde2be23e8`.
+Apple accepted app submission `4c24d974-51d3-43ce-903c-825a284670fd` and DMG
+submission `4e5b95b7-0f72-4f27-b6b3-f26c432484e2`. Both artifacts were stapled,
+Gatekeeper accepted them with `source=Notarized Developer ID`, and the release
+lane's signed verifier completed before writing the checksum sidecar.
+
+The public installer URL returned 200 with the recorded byte count, disk-image
+content type, byte-range support, and immutable cache control. Landing-site
+commit `fb4a28f` was merged through PR #2 as `58edb284a3ef3931add74462e68b741b46af535f`
+and manually deployed to Cloudflare Pages as production deployment
+`02e5123f-3e0a-413c-b5a9-501c11d0581b`. That deployment and
+`yawn-site.pages.dev`, fetched with `Cache-Control: no-cache`, show version
+0.5.9, the exact installer URL, and its checksum. No superseded installer was
+deleted during this release.
+
 ## 0.5.8 release receipt
 
 **0.5.8 was released on 2026-08-16 with summary-first local meeting notes.**
