@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
+  backgroundTranscriptionPresentation,
   canOpenStart,
   canStartMeeting,
   captureActivity,
@@ -60,6 +61,26 @@ test("recording starts only from the actual ready-and-idle state", () => {
   assert.equal(canStartMeeting({ startup: "ready", capture: "idle" }), true);
   assert.equal(canStartMeeting({ startup: "checking", capture: "idle" }), false);
   assert.equal(canStartMeeting({ startup: "ready", capture: "recording" }), false);
+  assert.equal(canStartMeeting({ startup: "ready", capture: "idle", background_transcription_active: true, background_transcription_queued_count: 1 }), true);
+  assert.equal(canStartMeeting({ startup: "ready", capture: "idle", background_transcription_active: true, background_transcription_queued_count: 2 }), false);
+});
+
+test("background transcription uses fixed private status and exposes capacity", () => {
+  assert.deepEqual(backgroundTranscriptionPresentation({
+    background_transcription_active: true,
+    background_transcription_queued_count: 1,
+  }), {
+    state: "active",
+    label: "An earlier meeting is processing locally.",
+    detail: "You can start the next meeting when the recorder is ready.",
+    canStart: true,
+  });
+  const full = backgroundTranscriptionPresentation({ background_transcription_queued_count: 2 });
+  assert.equal(full.state, "full");
+  assert.equal(full.canStart, false);
+  assert.match(full.detail, /Nothing has been discarded/);
+  assert.doesNotMatch(`${full.label} ${full.detail}`, /meeting[_ -]?id|transcript|audio text|model|path|receipt/i);
+  assert.equal(backgroundTranscriptionPresentation({}), null);
 });
 
 test("the recording sheet waits for both audio sources", () => {
@@ -369,6 +390,8 @@ test("startup keeps polling until the app is ready", () => {
   assert.equal(shouldPollSnapshot({ startup: "checking", capture: "idle" }), true);
   assert.equal(shouldPollSnapshot({ startup: "ready", capture: "idle" }), false);
   assert.equal(shouldPollSnapshot({ startup: "ready", capture: "recording" }), true);
+  assert.equal(shouldPollSnapshot({ startup: "ready", capture: "idle", background_transcription_active: true }), true);
+  assert.equal(shouldPollSnapshot({ startup: "ready", capture: "idle", background_transcription_queued_count: 1 }), true);
 });
 
 test("the generate control follows the backend's eligibility signal alone", () => {

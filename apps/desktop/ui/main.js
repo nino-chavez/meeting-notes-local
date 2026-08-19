@@ -1,4 +1,5 @@
 import {
+  backgroundTranscriptionPresentation,
   canOpenStart,
   captureActivity,
   captureActivityElapsedSeconds,
@@ -294,6 +295,7 @@ function renderModelSetup() {
 function renderHome() {
   const permission = permissionSummary(state.permissions);
   const audioReady = permission.state === "ready";
+  const startAvailable = canOpenStart(state.snapshot, state.permissions);
   const setupAction = permissionAction(state.permissions);
   const library = state.library;
   return `
@@ -306,7 +308,7 @@ function renderHome() {
       <div class="home-action">
         ${audioReady ? `
           <div class="inline-actions">
-            <button class="button button-record" type="button" data-action="open-start">Record</button>
+            <button class="button button-record" type="button" data-action="open-start" ${startAvailable ? "" : "disabled"}>Record</button>
             <span class="shortcut" aria-label="Keyboard shortcut">⌘ R</span>
           </div>
           <p>Everything stays on this Mac. No account, bot, or automatic sharing.</p>
@@ -316,12 +318,25 @@ function renderHome() {
         `}
       </div>
     </section>
+    ${renderBackgroundTranscription(state.snapshot)}
     <section aria-labelledby="meetings-heading">
       <div class="section-heading">
         <h2 id="meetings-heading">Recent meetings</h2>
         ${library?.total ? `<input class="search-input" type="search" data-field="library-search" value="${escapeHtml(state.search)}" placeholder="Find a meeting by title" aria-label="Find a meeting by title" />` : ""}
       </div>
       ${renderLibrary(library)}
+    </section>
+  `;
+}
+
+function renderBackgroundTranscription(snapshot) {
+  const processing = backgroundTranscriptionPresentation(snapshot);
+  if (!processing) return "";
+  return `
+    <section class="message-card background-transcription" data-state="${escapeHtml(processing.state)}" aria-live="polite">
+      <p class="eyebrow">Local processing</p>
+      <h2>${escapeHtml(processing.label)}</h2>
+      <p>${escapeHtml(processing.detail)}</p>
     </section>
   `;
 }

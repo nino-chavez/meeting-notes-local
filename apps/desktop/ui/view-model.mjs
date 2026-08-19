@@ -132,7 +132,30 @@ export function transcriptionWorkerHeartbeatAgeSeconds(snapshot, nowEpochSeconds
 }
 
 export function canStartMeeting(snapshot) {
-  return snapshot?.startup === "ready" && snapshot?.capture === "idle";
+  const backgroundJobs = Number(snapshot?.background_transcription_queued_count) || 0;
+  return snapshot?.startup === "ready"
+    && snapshot?.capture === "idle"
+    && backgroundJobs < 2;
+}
+
+export function backgroundTranscriptionPresentation(snapshot) {
+  const queued = Math.max(0, Number(snapshot?.background_transcription_queued_count) || 0);
+  const active = snapshot?.background_transcription_active === true;
+  if (!active && queued === 0) return null;
+  if (queued >= 2) {
+    return {
+      state: "full",
+      label: "Earlier meetings are processing locally.",
+      detail: "Yawn will accept the next recording after one finishes processing. Nothing has been discarded.",
+      canStart: false,
+    };
+  }
+  return {
+    state: "active",
+    label: "An earlier meeting is processing locally.",
+    detail: "You can start the next meeting when the recorder is ready.",
+    canStart: true,
+  };
 }
 
 export function canOpenStart(snapshot, permission) {
@@ -158,7 +181,9 @@ export function captureIsInProgress(snapshot) {
 export function shouldPollSnapshot(snapshot) {
   return snapshot?.startup !== "ready"
     || captureIsInProgress(snapshot)
-    || snapshot?.capture === "transcript-ready";
+    || snapshot?.capture === "transcript-ready"
+    || snapshot?.background_transcription_active === true
+    || (Number(snapshot?.background_transcription_queued_count) || 0) > 0;
 }
 
 export function permissionSummary(permission) {
