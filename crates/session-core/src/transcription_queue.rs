@@ -258,6 +258,9 @@ impl<'a> TranscriptionQueue<'a> {
                     .map_err(|_| TranscriptionQueueError::Malformed("request directory id"))?;
                 let queue_item = self.load_item(&item.path(), request_id)?;
                 verify_source(&meeting_dir, &meeting, &queue_item.request)?;
+                if let Some(result) = &queue_item.result {
+                    verify_artifact_ref(&meeting_dir, &result.transcript)?;
+                }
                 items.push(queue_item);
             }
         }
@@ -454,8 +457,13 @@ impl<'a> TranscriptionQueue<'a> {
         let item = self.load_item(&dir, request_id)?;
         let meeting = self.load_source(&meeting_dir, &item.request)?;
         verify_source(&meeting_dir, &meeting, &item.request)?;
-        if item.result.is_some() || item.commit.is_some() {
+        if item.commit.is_some() {
             return Err(TranscriptionQueueError::MissingResult);
+        }
+        if item.result.is_some() && kind != TranscriptionTerminalKind::Quarantined {
+            return Err(TranscriptionQueueError::Malformed(
+                "ordinary failure cannot follow an admitted result",
+            ));
         }
         if let Some(existing) = &item.terminal {
             if existing.kind == kind {
@@ -532,15 +540,24 @@ impl<'a> TranscriptionQueue<'a> {
         }
         let claim = load_live_claim(dir, request_id)?;
         let result = read_optional_json(&dir.join(RESULT_FILE))?;
-        let terminal = read_optional_json(&dir.join(TERMINAL_FILE))?;
+        let terminal: Option<TranscriptionTerminal> = read_optional_json(&dir.join(TERMINAL_FILE))?;
         let commit = read_optional_json(&dir.join(COMMIT_FILE))?;
-        if result.is_some() && terminal.is_some() {
+        if result.is_some()
+            && terminal.as_ref().map(|value| value.kind)
+                != Some(TranscriptionTerminalKind::Quarantined)
+            && terminal.is_some()
+        {
             return Err(TranscriptionQueueError::Malformed(
-                "result and terminal both present",
+                "result and ordinary terminal both present",
             ));
         }
         if commit.is_some() && result.is_none() {
             return Err(TranscriptionQueueError::Malformed("commit without result"));
+        }
+        if commit.is_some() && terminal.is_some() {
+            return Err(TranscriptionQueueError::Malformed(
+                "commit and terminal both present",
+            ));
         }
         Ok(TranscriptionQueueItem {
             request,
@@ -935,6 +952,120 @@ mod tests {
         assert!(matches!(
             queue.admit_result(request.request_id, bytes, reference, 6),
             Err(TranscriptionQueueError::Terminal)
+        ));
+    }
+
+    #[test]
+    fn admitted_result_can_be_quarantined_but_never_claimed_or_published() {
+        let (_temp, storage, request) = fixture();
+        let queue = queue(&storage);
+        queue.enqueue(request.clone()).unwrap();
+        let bytes = b"transcript";
+        let digest = digest_bytes(bytes);
+        let reference = ArtifactRef {
+            relative_path: format!("transcript/{digest}.json"),
+            sha256: digest,
+        };
+        queue
+            .admit_result(request.request_id, bytes, reference, 6)
+            .unwrap();
+        let item = queue
+            .fail(
+                request.request_id,
+                TranscriptionTerminalKind::Quarantined,
+                7,
+            )
+            .unwrap();
+        assert!(item.result.is_some());
+        assert_eq!(
+            item.terminal.unwrap().kind,
+            TranscriptionTerminalKind::Quarantined
+        );
+        assert!(matches!(
+            queue.claim(request.request_id, "worker".into(), 8),
+            Err(TranscriptionQueueError::Terminal)
+        ));
+        assert!(matches!(
+            queue.commit(request.request_id, 8),
+            Err(TranscriptionQueueError::Terminal)
+        ));
+    }
+
+    #[test]
+    fn ordinary_failure_and_commit_plus_terminal_receipts_are_malformed() {
+        {
+            let (_temp, storage, request) = fixture();
+            let queue = queue(&storage);
+            queue.enqueue(request.clone()).unwrap();
+            let bytes = b"transcript";
+            let digest = digest_bytes(bytes);
+            let reference = ArtifactRef {
+                relative_path: format!("transcript/{digest}.json"),
+                sha256: digest,
+            };
+            queue
+                .admit_result(request.request_id, bytes, reference, 6)
+                .unwrap();
+            assert!(matches!(
+                queue.fail(request.request_id, TranscriptionTerminalKind::Failed, 7),
+                Err(TranscriptionQueueError::Malformed(_))
+            ));
+            let item_dir = storage.path().join(format!(
+                "meetings/meeting-a/{QUEUE_DIRECTORY}/{}",
+                request.request_id
+            ));
+            let terminal = TranscriptionTerminal {
+                schema: TranscriptionTerminalSchema::V1,
+                request_id: request.request_id,
+                kind: TranscriptionTerminalKind::Failed,
+                at_epoch_seconds: 7,
+            };
+            durable_create_new(
+                &item_dir.join(TERMINAL_FILE),
+                &canonical(&terminal).unwrap(),
+            )
+            .unwrap();
+            assert!(matches!(
+                queue.discover(),
+                Err(TranscriptionQueueError::Malformed(_))
+            ));
+        }
+
+        let (_temp, storage, request) = fixture();
+        let queue = queue(&storage);
+        queue.enqueue(request.clone()).unwrap();
+        let bytes = b"transcript";
+        let digest = digest_bytes(bytes);
+        queue
+            .admit_result(
+                request.request_id,
+                bytes,
+                ArtifactRef {
+                    relative_path: format!("transcript/{digest}.json"),
+                    sha256: digest,
+                },
+                6,
+            )
+            .unwrap();
+        queue.commit(request.request_id, 8).unwrap();
+        let item_dir = storage.path().join(format!(
+            "meetings/meeting-a/{QUEUE_DIRECTORY}/{}",
+            request.request_id
+        ));
+        let terminal = TranscriptionTerminal {
+            schema: TranscriptionTerminalSchema::V1,
+            request_id: request.request_id,
+            kind: TranscriptionTerminalKind::Quarantined,
+            at_epoch_seconds: 9,
+        };
+        durable_create_new(
+            &item_dir.join(TERMINAL_FILE),
+            &canonical(&terminal).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            queue.discover(),
+            Err(TranscriptionQueueError::Malformed(_))
         ));
     }
 }
