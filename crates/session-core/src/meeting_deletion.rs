@@ -420,12 +420,10 @@ fn ensure_transcription_safe_for_destructive_work(
     meeting_id: &str,
 ) -> Result<(), MeetingDeletionError> {
     let discovery = TranscriptionQueue::open(storage)?.discover()?;
-    let orphan = !discovery.items.is_empty()
-        && discovery
-            .orphan_captured_meetings
-            .iter()
-            .any(|id| id == meeting_id);
-    if orphan
+    if discovery
+        .orphan_captured_meetings
+        .iter()
+        .any(|id| id == meeting_id)
         || discovery.items.iter().any(|item| {
             if item.request.meeting_id != meeting_id {
                 return false;
@@ -530,6 +528,7 @@ mod tests {
         let directory = storage.resolve(&Path::new("meetings").join(id)).unwrap();
         create_private_dir(&directory).unwrap();
         create_private_dir(&directory.join("capture")).unwrap();
+        create_private_dir(&directory.join("transcription-queue")).unwrap();
         for (relative, bytes) in [
             ("attempt.json", b"attempt".as_slice()),
             ("ownership.json", b"ownership".as_slice()),
@@ -885,6 +884,21 @@ mod tests {
             1,
             "the folder itself is organization, not the deleted meeting's"
         );
+    }
+
+    #[test]
+    fn whole_meeting_deletion_refuses_the_only_captured_orphan() {
+        let (_temp, storage) = storage();
+        let directory = fixture(&storage, "captured-orphan");
+        fs::remove_dir(directory.join("transcription-queue")).unwrap();
+        let coordination = MeetingStorageCoordination::default();
+
+        assert!(matches!(
+            delete_meeting_wholly(&storage, &coordination, "captured-orphan"),
+            Err(MeetingDeletionError::NonterminalTranscription)
+        ));
+        assert!(directory.exists());
+        assert!(directory.join("capture/mic.wav").exists());
     }
 
     /// A crash between the row removal and the `staged` transition resumes.

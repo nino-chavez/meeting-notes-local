@@ -1067,16 +1067,10 @@ fn ensure_transcription_safe_for_destructive_work(
     meeting_id: &str,
 ) -> Result<(), RetentionError> {
     let discovery = TranscriptionQueue::open(storage)?.discover()?;
-    // A queue-less captured meeting is legacy data when the storage has never
-    // used the queue. Once queue work exists, however, a captured meeting that
-    // discover reports as an orphan is missing its durable request and must be
-    // preserved rather than silently released.
-    let orphan = !discovery.items.is_empty()
-        && discovery
-            .orphan_captured_meetings
-            .iter()
-            .any(|id| id == meeting_id);
-    if orphan
+    if discovery
+        .orphan_captured_meetings
+        .iter()
+        .any(|id| id == meeting_id)
         || discovery.items.iter().any(|item| {
             if item.request.meeting_id != meeting_id {
                 return false;
@@ -1589,6 +1583,7 @@ mod tests {
         let directory = meeting_dir(storage, id).unwrap();
         create_private_dir(&directory).unwrap();
         create_private_dir(&directory.join("capture")).unwrap();
+        create_private_dir(&directory.join("transcription-queue")).unwrap();
         for (relative, bytes) in [
             ("attempt.json", b"attempt".as_slice()),
             ("ownership.json", b"ownership".as_slice()),
@@ -1636,6 +1631,7 @@ mod tests {
         let directory = meeting_dir(storage, id).unwrap();
         create_private_dir(&directory).unwrap();
         create_private_dir(&directory.join("capture")).unwrap();
+        create_private_dir(&directory.join("transcription-queue")).unwrap();
         durable_create_new(&directory.join("attempt.json"), b"attempt").unwrap();
         durable_create_new(&directory.join("ownership.json"), b"ownership").unwrap();
         let mic_bytes = vec![1_u8; 44];
@@ -2142,6 +2138,37 @@ mod tests {
         assert_eq!(final_meeting.lifecycle, MeetingLifecycle::Captured);
         assert_eq!(final_meeting.retention.state, AudioState::Released);
         verify_record_artifacts(&directory, &final_meeting).unwrap();
+    }
+
+    #[test]
+    fn manual_deletion_refuses_the_only_captured_orphan() {
+        let (_temp, storage) = storage();
+        let (directory, _meeting) = fixture(&storage, "captured-orphan", None);
+        fs::remove_dir(directory.join("transcription-queue")).unwrap();
+        let coordination = MeetingStorageCoordination::default();
+
+        assert!(matches!(
+            delete_meeting_audio_manually(&storage, &coordination, "captured-orphan"),
+            Err(ManualAudioDeletionError::Retention(
+                RetentionError::UnexplainedAudioLoss
+            ))
+        ));
+        assert!(directory.join("capture/mic.wav").exists());
+        assert!(directory.join("capture/system.wav").exists());
+    }
+
+    #[test]
+    fn due_retention_quarantines_the_only_captured_orphan() {
+        let (_temp, storage) = storage();
+        let (directory, _meeting) = fixture(&storage, "captured-orphan", Some(10));
+        fs::remove_dir(directory.join("transcription-queue")).unwrap();
+
+        assert_eq!(
+            execute_due_retention(&storage, 10).unwrap(),
+            vec![RetentionOutcome::Quarantined("captured-orphan".into())]
+        );
+        assert!(directory.join("capture/mic.wav").exists());
+        assert!(directory.join("capture/system.wav").exists());
     }
 
     #[test]
