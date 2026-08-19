@@ -351,6 +351,15 @@ test("retry comparison UI keeps the decision explicit and uses exact backend com
   assert.match(source, /else if \(action === "decide-retry-later"\) \{\s*closeModal\(\);\s*render\(\);\s*\}/);
   assert.match(source, /The retained transcript stays as it is unless you explicitly use this retry\./);
   assert.match(source, /current generated note\.\s*<\/h3><p>You will need to regenerate the note/);
+  // The "clears the current generated note" warning must not render on a
+  // meeting that has no note. It is guarded by the same "transcript-only"
+  // signal the note card reads, compared strictly so an unknown or loading
+  // note state still shows the warning.
+  assert.match(
+    source,
+    /const hasNoGeneratedNote = state\.selected\?\.note\?\.state === "transcript-only";/,
+  );
+  assert.match(source, /\$\{hasNoGeneratedNote \? "" : `<section class="retry-use-warning"/);
   assert.match(source, /state\.transcriptRetry = \{ \.\.\.retry, phase: "starting" \}/);
   assert.match(source, /catch \(error\) \{\s*if \(state\.selected === selection\) state\.transcriptRetry = null;\s*reportError\(error\);/);
 });

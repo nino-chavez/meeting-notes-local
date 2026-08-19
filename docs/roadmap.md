@@ -443,8 +443,32 @@ promotes, and proves the pointer is cleared, the lifecycle returns to
 line makes that test fail, so the pre-decision modal warning is now evidenced
 rather than assumed.
 
-This is source-verified evidence only. The corrected copy has not been observed
-rendered, and the note-existed promotion has not been walked in the fixture app.
+**Rendered confirmation — 2026-08-17.** On a freshly seeded root, Computer Use
+directly observed the corrected toast reading exactly `The retry transcript is
+now current. Generate a new note when you're ready.` on a meeting whose note
+card said **No meeting note yet.** Promotion continuity then held across **Back
+to meetings** and reopen: the promoted title persisted, the note stayed absent,
+and the control read **Retry transcript** rather than **Review retry**. The
+library list refreshed to the promoted title, so the decision command still
+invalidates the preview library.
+
+**Modal warning defect found by that walk — fixed, 2026-08-17.** The same
+journey exposed a second instance of the defect. The pre-decision modal stated
+`Using this retry clears the current generated note.` on a meeting that had no
+note, asserting an object that did not exist. The earlier source reading had
+recorded this warning as correct; the rendered walk is what falsified that.
+
+The warning now renders only when a note exists, gated on the same
+`transcript-only` signal the note card reads, compared strictly so an unknown or
+still-loading note state keeps the warning. Suppression was chosen over new
+copy: with no note there is nothing to warn about, and the detail view already
+offers **Generate note**. Computer Use confirmed the modal now shows the
+comparison and the three decisions with no warning bar.
+
+The note-existed direction of that warning is not rendered evidence. It rests on
+the strict-equality guard and a mechanical assertion in the UI suite, because no
+synthetic note fixture exists yet. Clearing an existing note likewise remains
+proven in source and not yet rendered.
 
 **Developer ID-signed local-bundle receipt — 2026-08-17.** The unreleased source
 build at `target/release/bundle/macos/Yawn.app`, built from app source commit

@@ -1117,6 +1117,11 @@ function renderTranscriptRetrySheet() {
   const retry = state.transcriptRetry;
   if (!retry?.operationId) return "";
   const deciding = state.busyAction === "decide-transcript-retry";
+  // The warning is about losing a generated note, so it is only true when one
+  // exists. "transcript-only" is the same signal the note card reads to say
+  // "No meeting note yet." An unknown or still-loading note state keeps the
+  // warning, because warning is the fail-safe direction.
+  const hasNoGeneratedNote = state.selected?.note?.state === "transcript-only";
   return `
     <div class="modal-backdrop" role="presentation">
       <section class="start-sheet transcript-retry-sheet" role="dialog" aria-modal="true" aria-labelledby="transcript-retry-sheet-title">
@@ -1130,7 +1135,7 @@ function renderTranscriptRetrySheet() {
           ${renderRetryComparisonTurns(retry.current?.turns, "current")}
           ${renderRetryComparisonTurns(retry.candidate?.turns, "candidate")}
         </div>
-        <section class="retry-use-warning" aria-labelledby="retry-use-warning-heading"><h3 id="retry-use-warning-heading">Using this retry clears the current generated note.</h3><p>You will need to regenerate the note from the selected retry. Yawn will not regenerate it automatically.</p></section>
+        ${hasNoGeneratedNote ? "" : `<section class="retry-use-warning" aria-labelledby="retry-use-warning-heading"><h3 id="retry-use-warning-heading">Using this retry clears the current generated note.</h3><p>You will need to regenerate the note from the selected retry. Yawn will not regenerate it automatically.</p></section>`}
         <div class="sheet-actions retry-sheet-actions">
           <button class="button button-quiet" type="button" data-action="decide-retry-later" ${deciding ? "disabled" : ""}>Decide later</button>
           <button class="button button-secondary" type="button" data-action="keep-current-transcript" ${deciding ? "disabled" : ""}>${deciding ? "Saving decision…" : "Keep current"}</button>
