@@ -1,18 +1,31 @@
 import {
+  backgroundTranscriptionPresentation,
   canOpenStart,
   captureActivity,
   captureActivityElapsedSeconds,
   captureIsInProgress,
   capturePresentation,
+  errorRecoveryPresentation,
   humanize,
+  libraryRecoveryPresentation,
+  localVocabularyPresentation,
+  meetingRecoveryPresentation,
+  meetingNotePresentation,
   mergePermissions,
   noteGenerationPresentation,
   permissionSummary,
+  recordingDevicePresentation,
+  retainedAudioPlaybackPresentation,
   retentionLabel,
   shouldPollSnapshot,
   transcriptPlainText,
+  transcriptRetryQualityPresentation,
+  transcriptSpeakerLabel,
+  transcriptRetryPresentation,
+  transcriptTurnsForSourceSpeaker,
   transcriptTurnsMatching,
   transcriptionWorkerHeartbeatAgeSeconds,
+  withheldTurnPresentation,
 } from "./view-model.mjs";
 
 const root = document.querySelector("#app");
@@ -20,6 +33,7 @@ const invoke = window.__TAURI__?.core?.invoke;
 
 const state = {
   activeView: "home",
+  audioPlayback: { state: "idle", source: null, message: "No recording is playing." },
   busyAction: "",
   consent: { participantsConsented: false, headphones: false, operatorAlone: false },
   error: "",
@@ -41,6 +55,10 @@ const state = {
   searchTimer: null,
   selected: null,
   snapshot: null,
+  speakerCorrection: null,
+  speakerCorrectionDraft: "",
+  transcriptRetry: null,
+  vocabulary: null,
   transcriptActionStatus: {},
   transcriptQuery: "",
 };
@@ -49,6 +67,7 @@ let noteSaveTimer;
 let libraryNoteSaveTimer;
 let permissionsRefreshTask;
 let activityTimer;
+let audioPlaybackPollActive = false;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -160,9 +179,12 @@ function render() {
       <main class="stage">${content}</main>
       ${state.modal === "start" ? renderStartSheet() : ""}
       ${state.modal === "rename-meeting" ? renderRenameMeetingSheet() : ""}
+      ${state.modal === "speaker-correction" ? renderSpeakerCorrectionSheet() : ""}
+      ${state.modal === "transcript-retry" ? renderTranscriptRetrySheet() : ""}
+      ${state.modal === "vocabulary" ? renderVocabularySheet() : ""}
       ${["delete-recording", "delete-transcript", "delete-meeting"].includes(state.modal) ? renderMeetingDeletionSheet() : ""}
       ${state.notice ? `<aside class="toast toast-notice" role="status"><button type="button" data-action="clear-notice" aria-label="Dismiss">×</button>${escapeHtml(state.notice)}</aside>` : ""}
-      ${state.error ? `<aside class="toast" role="alert"><button type="button" data-action="clear-error" aria-label="Dismiss">×</button>${escapeHtml(state.error)}</aside>` : ""}
+      ${state.error ? `<aside class="toast" role="alert"><button type="button" data-action="clear-error" aria-label="Dismiss">×</button><span>${escapeHtml(state.error.message)}</span>${state.error.action ? `<button class="button button-quiet button-small" type="button" data-action="${escapeHtml(state.error.action.action)}">${escapeHtml(state.error.action.label)}</button>` : ""}</aside>` : ""}
     </div>
   `;
   restoreEditorFocus(editorFocus);
@@ -175,7 +197,7 @@ function render() {
 function captureEditorFocus() {
   const active = document.activeElement;
   const field = active?.dataset?.field;
-  if (!["operator-note", "library-operator-note", "transcript-search"].includes(field)) return null;
+  if (!["operator-note", "library-operator-note", "transcript-search", "vocabulary-before", "vocabulary-after"].includes(field)) return null;
   if (!active.dataset.meetingId) return null;
   return {
     field,
@@ -273,6 +295,7 @@ function renderModelSetup() {
 function renderHome() {
   const permission = permissionSummary(state.permissions);
   const audioReady = permission.state === "ready";
+  const startAvailable = canOpenStart(state.snapshot, state.permissions);
   const setupAction = permissionAction(state.permissions);
   const library = state.library;
   return `
@@ -285,7 +308,7 @@ function renderHome() {
       <div class="home-action">
         ${audioReady ? `
           <div class="inline-actions">
-            <button class="button button-record" type="button" data-action="open-start">Record</button>
+            <button class="button button-record" type="button" data-action="open-start" ${startAvailable ? "" : "disabled"}>Record</button>
             <span class="shortcut" aria-label="Keyboard shortcut">⌘ R</span>
           </div>
           <p>Everything stays on this Mac. No account, bot, or automatic sharing.</p>
@@ -295,6 +318,7 @@ function renderHome() {
         `}
       </div>
     </section>
+    ${renderBackgroundTranscription(state.snapshot)}
     <section aria-labelledby="meetings-heading">
       <div class="section-heading">
         <h2 id="meetings-heading">Recent meetings</h2>
@@ -305,8 +329,24 @@ function renderHome() {
   `;
 }
 
+function renderBackgroundTranscription(snapshot) {
+  const processing = backgroundTranscriptionPresentation(snapshot);
+  if (!processing) return "";
+  return `
+    <section class="message-card background-transcription" data-state="${escapeHtml(processing.state)}" aria-live="polite">
+      <p class="eyebrow">Local processing</p>
+      <h2>${escapeHtml(processing.label)}</h2>
+      <p>${escapeHtml(processing.detail)}</p>
+    </section>
+  `;
+}
+
 function renderLibrary(library) {
   if (!library) return `<p class="quiet-copy">Loading meetings saved on this Mac…</p>`;
+  const recovery = libraryRecoveryPresentation(library);
+  if (recovery) {
+    return `<section class="empty-library recovery-card attention" aria-labelledby="library-recovery-title"><h3 id="library-recovery-title">${escapeHtml(recovery.title)}</h3><p>${escapeHtml(recovery.detail)}</p><button class="button button-primary button-small" type="button" data-action="${recovery.action.action}">${escapeHtml(recovery.action.label)}</button></section>`;
+  }
   if (!library.rows?.length) {
     const message = state.search.trim()
       ? library.message || "No meeting matches that title."
@@ -446,17 +486,47 @@ function renderTranscript(turns, title, detail = "", { copyAction = "", openFile
   const fileBusy = state.busyAction === openFileAction;
   const query = workspace ? state.transcriptQuery.trim() : "";
   const visibleTurns = workspace ? transcriptTurnsMatching(turns, query) : turns;
+  const vocabulary = workspace
+    ? localVocabularyPresentation({
+      meetingId: state.selected?.row?.meetingId,
+      transcriptMeetingId: state.selected?.transcript?.meetingId,
+      transcriptSha256: state.selected?.transcript?.currentTranscriptSha256,
+      capture: state.snapshot?.capture,
+    })
+    : null;
   const actions = copyAction || openFileAction ? `<div class="transcript-actions" aria-label="Transcript actions">
     ${copyAction ? `<button class="button button-quiet button-small" type="button" data-action="${copyAction}" ${copyBusy ? "disabled" : ""}>${copyBusy ? "Copying…" : "Copy transcript"}</button>` : ""}
     ${openFileAction ? `<button class="button button-quiet button-small" type="button" data-action="${openFileAction}" ${fileBusy ? "disabled" : ""}>${fileBusy ? "Opening…" : "Open transcript file"}</button>` : ""}
     <span class="transcript-action-status" role="status" aria-live="polite">${escapeHtml(transcriptActionStatus(scope))}</span>
   </div>` : "";
-  const transcriptLines = visibleTurns.map((turn) => `
-    <div class="transcript-line ${turn.withheld ? "withheld" : ""}">
-      <time>${escapeHtml(timeLabel(turn.start))}</time>
-      <p>${turn.withheld ? "This turn was withheld by the voice check." : escapeHtml(turn.text)}</p>
-    </div>
-  `).join("");
+  const transcriptLines = visibleTurns.map((turn) => {
+    const speakerLabel = transcriptSpeakerLabel(turn);
+    const correctionAvailable = workspace && !turn.withheld && Boolean(state.selected?.transcript?.currentTranscriptSha256);
+    const restore = workspace
+      ? withheldTurnPresentation(turn, {
+        meetingId: state.selected?.row?.meetingId,
+        meetingHandle: state.selected?.row?.handle,
+        transcriptMeetingId: state.selected?.transcript?.meetingId,
+        transcriptSha256: state.selected?.transcript?.currentTranscriptSha256,
+        capture: state.snapshot?.capture,
+      })
+      : null;
+    const correctionLabel = turn.speakerCorrected
+      ? `Change speaker name. Currently ${speakerLabel}, corrected from ${turn.sourceSpeaker || "Unattributed"}.`
+      : `Correct speaker name. Currently ${speakerLabel}.`;
+    return `
+      <div class="transcript-line ${turn.withheld ? "withheld" : ""}">
+        <div class="transcript-line-meta">
+          <time>${escapeHtml(timeLabel(turn.start))}</time>
+          ${speakerLabel ? correctionAvailable
+            ? `<button class="speaker-label-button" type="button" data-action="open-speaker-correction" data-source-turn-index="${escapeHtml(turn.sourceTurnIndex)}" aria-label="${escapeHtml(correctionLabel)}"><span>${escapeHtml(speakerLabel)}</span>${turn.speakerCorrected ? `<small>Corrected</small>` : ""}</button>`
+            : `<span>${escapeHtml(speakerLabel)}</span>` : ""}
+        </div>
+        <p>${turn.withheld ? "This turn was withheld by the voice check." : escapeHtml(turn.text)}</p>
+        ${restore ? `<button class="button button-quiet button-small" type="button" data-action="restore-withheld-turn" data-source-turn-index="${escapeHtml(restore.sourceTurnIndex)}">${restore.label}</button>` : ""}
+      </div>
+    `;
+  }).join("");
   if (workspace) {
     const queryStatus = query
       ? visibleTurns.length
@@ -467,7 +537,10 @@ function renderTranscript(turns, title, detail = "", { copyAction = "", openFile
       <section class="transcript-panel transcript-workspace" aria-labelledby="transcript-heading">
         <div class="transcript-workspace-toolbar">
           <div class="transcript-heading"><h3 id="transcript-heading">${escapeHtml(title)}</h3>${detail ? `<p>${escapeHtml(detail)}</p>` : ""}</div>
-          ${actions}
+          <div class="transcript-workspace-actions">
+            ${vocabulary ? `<button class="button button-quiet button-small" type="button" data-action="${vocabulary.action}">${vocabulary.label}</button>` : ""}
+            ${actions}
+          </div>
         </div>
         <div class="transcript-search-row">
           <label class="screen-reader-only" for="transcript-search-input">Find in transcript</label>
@@ -478,6 +551,7 @@ function renderTranscript(turns, title, detail = "", { copyAction = "", openFile
         <div class="transcript-scroll" tabindex="0" aria-label="Transcript turns">
           ${transcriptLines || `<p class="transcript-empty">${query ? "No retained transcript turn matches that search." : "No transcript turns are available."}</p>`}
         </div>
+        ${turns.some((turn) => turn.speakerCorrected) ? `<p class="transcript-correction-note">Speaker names corrected here are a local review layer. The retained transcript file is unchanged.</p>` : ""}
       </section>
     `;
   }
@@ -490,19 +564,140 @@ function renderTranscript(turns, title, detail = "", { copyAction = "", openFile
   `;
 }
 
-function renderDraftPoints(claims, claimEvidence) {
-  if (!claims.length) return "";
+function renderMeetingNoteItems(claims, claimEvidence) {
   return `
-    <details class="draft-points" open>
-      <summary><span><strong>Draft from transcript</strong><small>Generated points need review against the retained source.</small></span><span class="draft-points-state">Review</span></summary>
-      <div class="draft-points-content">
-        <ul class="claim-list">${claims.map((claim) => `<li class="claim-item">
-          <span class="claim-label">${escapeHtml(humanize(claim.claimType))}</span>
+    <ul class="meeting-note-list">${claims.map((claim) => `<li class="meeting-note-item">
           <p>${escapeHtml(claim.claim)}</p>
           ${renderClaimEvidence(claim, claimEvidence[claim.ordinal])}
         </li>`).join("")}</ul>
+  `;
+}
+
+function renderMeetingNote(note, claimEvidence) {
+  const presentation = meetingNotePresentation(note);
+  if (presentation.state === "empty") {
+    if (note?.state !== "transcript-only") return "";
+    return `
+      <section class="meeting-note meeting-note-unavailable" aria-labelledby="meeting-note-heading">
+        <header class="meeting-note-header">
+          <p class="eyebrow">Meeting note</p>
+          <h2 id="meeting-note-heading">No meeting note yet.</h2>
+          <p>${escapeHtml(note?.message || "Yawn has no generated note for this meeting.")}</p>
+        </header>
+      </section>
+    `;
+  }
+  if (presentation.state === "extracts-only") {
+    const count = presentation.highlights.length;
+    return `
+      <section class="meeting-note meeting-note-unavailable" aria-labelledby="meeting-note-heading">
+        <header class="meeting-note-header">
+          <p class="eyebrow">Meeting note</p>
+          <h2 id="meeting-note-heading">A summary wasn’t produced.</h2>
+          <p>Yawn selected ${count} transcript ${count === 1 ? "excerpt" : "excerpts"}, but those excerpts are source material, not a meeting summary.</p>
+        </header>
+        <details class="transcript-highlights">
+          <summary><span>Review selected excerpts</span><span>${count}</span></summary>
+          <div class="transcript-highlights-content">${renderMeetingNoteItems(presentation.highlights, claimEvidence)}</div>
+        </details>
+      </section>
+    `;
+  }
+  return `
+    <section class="meeting-note" aria-labelledby="meeting-note-heading">
+      <header class="meeting-note-header">
+        <p class="eyebrow">Meeting note</p>
+        <h2 id="meeting-note-heading">What happened and what comes next</h2>
+        <p>Generated from the transcript. Use the source links to check anything that matters.</p>
+      </header>
+      ${presentation.summary.length ? `
+        <section class="meeting-note-section meeting-note-overview" aria-labelledby="meeting-overview-heading">
+          <h3 id="meeting-overview-heading">Overview</h3>
+          ${presentation.summary.map((claim) => `<div class="meeting-note-summary-item">
+            <p>${escapeHtml(claim.claim)}</p>
+            ${claim.handle ? renderClaimEvidence(claim, claimEvidence[claim.ordinal]) : ""}
+          </div>`).join("")}
+        </section>
+      ` : ""}
+      ${presentation.groups.map((group, index) => `
+        <section class="meeting-note-section" aria-labelledby="meeting-note-group-${index}">
+          <h3 id="meeting-note-group-${index}">${escapeHtml(group.title)}</h3>
+          ${renderMeetingNoteItems(group.claims, claimEvidence)}
+        </section>
+      `).join("")}
+      ${presentation.highlights.length ? `
+        <details class="transcript-highlights">
+          <summary><span>Additional transcript highlights</span><span>${presentation.highlights.length}</span></summary>
+          <div class="transcript-highlights-content">${renderMeetingNoteItems(presentation.highlights, claimEvidence)}</div>
+        </details>
+      ` : ""}
+    </section>
+  `;
+}
+
+function renderTranscriptDisclosure(transcript, recovery = null) {
+  if (recovery?.state === "transcript-unavailable" && !transcript?.turns?.length) return "";
+  if (!transcript?.turns?.length && !transcript?.message) return "";
+  return `
+    <details class="transcript-disclosure">
+      <summary><span><strong>Full transcript</strong><small>The retained record for checking a decision, owner, or follow-up.</small></span><span class="transcript-disclosure-state">Open</span></summary>
+      <div class="transcript-disclosure-content">
+        ${transcript?.turns?.length ? renderTranscript(transcript.turns, "Source transcript", "Search or read the complete retained conversation.", {
+          copyAction: "copy-library-transcript",
+          openFileAction: "open-library-transcript-file",
+          workspace: true,
+        }) : `<section class="note-section transcript-unavailable"><p class="message-card">${escapeHtml(transcript.message)}</p></section>`}
       </div>
     </details>
+  `;
+}
+
+function renderMeetingRecovery(recovery) {
+  if (!recovery) return "";
+  const headingId = `meeting-recovery-${recovery.state}`;
+  return `
+    <section class="message-card recovery-card ${recovery.tone === "working" ? "" : "attention"}" aria-labelledby="${headingId}">
+      <h2 id="${headingId}">${escapeHtml(recovery.title)}</h2>
+      <p>${escapeHtml(recovery.detail)}</p>
+      ${recovery.action ? `<button class="button button-primary button-small" type="button" data-action="${escapeHtml(recovery.action.action)}">${escapeHtml(recovery.action.label)}</button>` : ""}
+    </section>
+  `;
+}
+
+function transcriptRetryContext(note, transcript, pending = null) {
+  return transcriptRetryPresentation({
+    meetingId: note?.meetingId || state.selected?.row?.meetingId || "",
+    transcriptMeetingId: transcript?.meetingId || "",
+    sourceTranscriptSha256: transcript?.currentTranscriptSha256 || "",
+    audioRetentionState: note?.audioRetention?.state || "",
+    capture: state.snapshot?.capture || "",
+    recovery: meetingRecoveryPresentation(note, transcript, state.generatingMeetingId),
+    pending,
+  });
+}
+
+function renderTranscriptRetryAction(note, transcript, recovery) {
+  const retry = transcriptRetryPresentation({
+    meetingId: note?.meetingId || state.selected?.row?.meetingId || "",
+    transcriptMeetingId: transcript?.meetingId || "",
+    sourceTranscriptSha256: transcript?.currentTranscriptSha256 || "",
+    audioRetentionState: note?.audioRetention?.state || "",
+    capture: state.snapshot?.capture || "",
+    recovery,
+    pending: state.selected?.transcriptRetry || null,
+  });
+  if (!retry) return "";
+  const starting = state.transcriptRetry?.phase === "starting";
+  return `
+    <section class="transcript-retry-action" aria-labelledby="transcript-retry-heading">
+      <div>
+        <h3 id="transcript-retry-heading">Transcript retry</h3>
+        <p>${retry.pending
+    ? "A retry is ready to review. Keep the retained transcript or explicitly use the retry."
+    : "Run a local retry, then compare it with the retained transcript before deciding."}</p>
+      </div>
+      <button class="button button-quiet button-small" id="transcript-retry-action" type="button" data-action="${retry.action}" ${starting ? "disabled" : ""}>${starting ? "Preparing retry…" : escapeHtml(retry.label)}</button>
+    </section>
   `;
 }
 
@@ -528,6 +723,8 @@ function renderMeeting() {
   const canDeleteMeeting = Boolean(note?.meetingDeletionHandle);
   const canManage = canDeleteRecording || canDeleteTranscript || canDeleteMeeting;
   const retentionMessage = note?.audioRetention?.message || "Audio-retention details are unavailable for this meeting.";
+  const recovery = meetingRecoveryPresentation(note, transcript, state.generatingMeetingId);
+  const playback = retainedAudioPlaybackPresentation(note, recovery, state.audioPlayback);
   return `
     <article class="meeting-page meeting-workspace-page" aria-labelledby="meeting-title">
       <button class="text-button" type="button" data-action="meetings">Back to meetings</button>
@@ -551,18 +748,17 @@ function renderMeeting() {
         <div class="meeting-meta"><span>${escapeHtml(dateLabel(row.createdAtEpochSeconds))}</span><span>${escapeHtml(note?.state ? humanize(note.state) : "Loading note")}</span></div>
         <p class="meeting-storage-note">${escapeHtml(retentionMessage)}</p>
       </header>
-      ${note?.message && !claims.length ? `<p class="message-card ${note.state === "summary-failed" ? "attention" : ""}">${escapeHtml(note.message)}</p>` : ""}
-      ${renderGenerateNote(note)}
+      ${renderMeetingRecovery(recovery)}
+      ${!recovery && note?.state !== "transcript-only" && note?.message && !claims.length ? `<p class="message-card ${note.state === "summary-failed" ? "attention" : ""}">${escapeHtml(note.message)}</p>` : ""}
       <div class="meeting-workspace">
         <main class="meeting-source-pane">
-          ${renderDraftPoints(claims, claimEvidence)}
-          ${transcript?.turns?.length ? renderTranscript(transcript.turns, "Source transcript", "The retained record for checking a decision, owner, or follow-up.", {
-            copyAction: "copy-library-transcript",
-            openFileAction: "open-library-transcript-file",
-            workspace: true,
-          }) : transcript?.message ? `<section class="note-section transcript-unavailable"><p class="message-card">${escapeHtml(transcript.message)}</p></section>` : ""}
+          ${renderMeetingNote(note, claimEvidence)}
+          ${renderGenerateNote(note, recovery)}
+          ${renderTranscriptRetryAction(note, transcript, recovery)}
+          ${renderTranscriptDisclosure(transcript, recovery)}
         </main>
         <aside class="meeting-notes-pane">
+          ${renderRetainedAudioPlayback(playback)}
           <section class="note-section your-notes-section" aria-labelledby="operator-note-heading">
           <div class="note-editor-head"><h3 id="operator-note-heading">Your notes</h3><span class="save-state" id="library-note-save-state">${escapeHtml(selectedNoteCopy)}</span></div>
           ${operatorNote?.unreadable
@@ -576,7 +772,30 @@ function renderMeeting() {
   `;
 }
 
-function renderGenerateNote(note) {
+function renderRetainedAudioPlayback(playback) {
+  if (!playback) return "";
+  const playingLabel = playback.playingSource === "microphone"
+    ? "Playing microphone recording"
+    : playback.playingSource === "system"
+      ? "Playing system audio recording"
+      : playback.status === "completed"
+        ? "Recording finished"
+        : "No recording is playing";
+  return `
+    <section class="note-section retained-audio-section" aria-labelledby="retained-audio-heading">
+      <h3 id="retained-audio-heading">Listen to saved audio</h3>
+      <p class="note-editor-help">Microphone and system audio are separate recordings.</p>
+      <div class="retained-audio-controls">
+        ${playback.controls.map((control) => `<button class="button button-secondary button-small" type="button" data-action="play-retained-audio" data-source="${escapeHtml(control.source)}" ${playback.isPlaying ? "disabled" : ""}>${escapeHtml(control.label)}</button>`).join("")}
+        ${playback.isPlaying ? `<button class="button button-quiet button-small" type="button" data-action="stop-retained-audio">Stop</button>` : ""}
+      </div>
+      <p class="save-state" aria-live="polite">${escapeHtml(playingLabel)}</p>
+    </section>
+  `;
+}
+
+function renderGenerateNote(note, recovery = meetingRecoveryPresentation(note, state.selected?.transcript, state.generatingMeetingId)) {
+  if (recovery && recovery.state !== "audio-released") return "";
   const control = noteGenerationPresentation(note, state.generatingMeetingId);
   if (!control) return "";
   return `
@@ -658,6 +877,356 @@ function renderRenameMeetingSheet() {
   `;
 }
 
+function openSpeakerCorrection(sourceTurnIndex) {
+  const transcript = state.selected?.transcript;
+  const turn = transcript?.turns?.find((candidate) => Number(candidate.sourceTurnIndex) === sourceTurnIndex);
+  if (!turn || turn.withheld || !transcript?.currentTranscriptSha256) return;
+  const sourceSpeaker = turn.sourceSpeaker || null;
+  const sourceLabel = sourceSpeaker || "Unattributed";
+  state.speakerCorrection = {
+    meetingId: transcript.meetingId,
+    sourceTranscriptSha256: transcript.currentTranscriptSha256,
+    sourceSpeaker,
+    sourceLabel,
+  };
+  state.speakerCorrectionDraft = transcriptSpeakerLabel(turn) === "Unattributed"
+    ? ""
+    : transcriptSpeakerLabel(turn);
+  state.modal = "speaker-correction";
+  render();
+  queueMicrotask(() => root.querySelector("#speaker-name-input")?.focus());
+}
+
+function renderSpeakerCorrectionSheet() {
+  const correction = state.speakerCorrection;
+  const turns = state.selected?.transcript?.turns || [];
+  if (!correction) return "";
+  const affected = transcriptTurnsForSourceSpeaker(turns, correction.sourceSpeaker).length;
+  const saving = state.busyAction === "speaker-correction";
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="start-sheet speaker-correction-sheet" role="dialog" aria-modal="true" aria-labelledby="speaker-correction-title">
+        <div class="sheet-head">
+          <div><p class="eyebrow">Transcript attribution</p><h2 id="speaker-correction-title">Name this speaker.</h2><p>This changes the review label for ${affected} matching transcript ${affected === 1 ? "turn" : "turns"}. The retained transcript file stays unchanged.</p></div>
+          <button class="icon-button" type="button" data-action="close-modal" aria-label="Close">×</button>
+        </div>
+        <div class="speaker-correction-source"><span>Source label</span><strong>${escapeHtml(correction.sourceLabel)}</strong></div>
+        <form data-form="speaker-correction">
+          <label class="field-label" for="speaker-name-input">Speaker name
+            <input class="meeting-title-input" id="speaker-name-input" data-field="speaker-name" maxlength="80" value="${escapeHtml(state.speakerCorrectionDraft)}" placeholder="e.g. Alex" autocomplete="off" />
+            <small>Every turn tied to this source label will use the same name in this meeting.</small>
+          </label>
+          <div class="speaker-correction-provenance"><strong>What stays preserved</strong><p>Yawn keeps the original label and records this as a separate local correction. Reopen this control and use the source label to undo it.</p></div>
+          <div class="sheet-actions">
+            <button class="button button-quiet" type="button" data-action="use-source-speaker">Use source label</button>
+            <button class="button button-quiet" type="button" data-action="close-modal">Cancel</button>
+            <button class="button button-primary" type="submit" ${saving || !state.speakerCorrectionDraft.trim() ? "disabled" : ""}>${saving ? "Saving…" : "Save speaker name"}</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+async function saveSpeakerCorrection() {
+  const correction = state.speakerCorrection;
+  const selection = state.selected;
+  const replacement = state.speakerCorrectionDraft.trim();
+  if (!correction || !selection?.row?.meetingId || !replacement) return;
+  await flushSelectedNoteSave();
+  await runBusy("speaker-correction", async () => {
+    const response = await invoke("correct_speaker_name", {
+      meetingId: correction.meetingId,
+      sourceTranscriptSha256: correction.sourceTranscriptSha256,
+      sourceSpeaker: correction.sourceSpeaker,
+      replacement,
+    });
+    if (state.selected !== selection) return;
+    state.modal = "";
+    state.speakerCorrection = null;
+    state.speakerCorrectionDraft = "";
+    state.notice = response.message || "Speaker name saved on this Mac.";
+    await reopenSelectedMeeting(selection.row.meetingId);
+  });
+}
+
+function vocabularyContext() {
+  return localVocabularyPresentation({
+    meetingId: state.selected?.row?.meetingId,
+    transcriptMeetingId: state.selected?.transcript?.meetingId,
+    transcriptSha256: state.selected?.transcript?.currentTranscriptSha256,
+    capture: state.snapshot?.capture,
+  });
+}
+
+function resetVocabularyDraft() {
+  if (!state.vocabulary) return;
+  state.vocabulary = {
+    ...state.vocabulary,
+    editingId: "",
+    pendingDeleteId: "",
+    sourcePhrase: "",
+    preferredReplacement: "",
+  };
+}
+
+function closeModal() {
+  const retryOpen = state.modal === "transcript-retry";
+  state.modal = "";
+  state.speakerCorrection = null;
+  state.speakerCorrectionDraft = "";
+  state.transcriptRetry = null;
+  state.vocabulary = null;
+  if (retryOpen) queueMicrotask(() => root.querySelector("#transcript-retry-action")?.focus());
+}
+
+async function openVocabulary() {
+  const context = vocabularyContext();
+  if (!context) return;
+  state.vocabulary = {
+    ...context,
+    entries: [],
+    editingId: "",
+    sourcePhrase: "",
+    preferredReplacement: "",
+    loading: true,
+  };
+  state.modal = "vocabulary";
+  render();
+  queueMicrotask(() => root.querySelector("#vocabulary-before-input")?.focus());
+  await refreshVocabulary();
+}
+
+async function refreshVocabulary() {
+  const vocabulary = state.vocabulary;
+  if (!vocabulary) return;
+  state.vocabulary = { ...vocabulary, loading: true };
+  render();
+  try {
+    const response = await invoke("local_vocabulary_list", {
+      meetingId: vocabulary.meetingId,
+      sourceTranscriptSha256: vocabulary.sourceTranscriptSha256,
+    });
+    if (state.vocabulary !== vocabulary && state.vocabulary?.meetingId !== vocabulary.meetingId) return;
+    state.vocabulary = { ...state.vocabulary, entries: response.entries || [], loading: false };
+  } catch (error) {
+    if (state.vocabulary?.meetingId === vocabulary.meetingId) {
+      state.vocabulary = { ...state.vocabulary, loading: false };
+    }
+    reportError(error);
+    return;
+  }
+  render();
+}
+
+function renderVocabularySheet() {
+  const vocabulary = state.vocabulary;
+  if (!vocabulary) return "";
+  const editing = vocabulary.entries?.find((entry) => entry.id === vocabulary.editingId);
+  const saving = state.busyAction === "vocabulary-save";
+  const rows = vocabulary.entries?.length
+    ? vocabulary.entries.map((entry) => {
+      const count = Number(entry.appliedTurnCount) || 0;
+      const use = `${count} ${count === 1 ? "use" : "uses"} in this meeting`;
+      return `
+        <li class="vocabulary-ledger-row" data-enabled="${entry.enabled ? "true" : "false"}">
+          <div class="vocabulary-ledger-terms"><span>${escapeHtml(entry.sourcePhrase)}</span><span aria-hidden="true">→</span><strong>${escapeHtml(entry.preferredReplacement)}</strong></div>
+          <div class="vocabulary-ledger-meta"><span>${entry.enabled ? "Enabled" : "Disabled"}</span><span>${escapeHtml(use)}</span></div>
+          <div class="vocabulary-ledger-actions">
+            ${vocabulary.pendingDeleteId === entry.id
+              ? `<span class="vocabulary-delete-confirmation" role="status">Delete this replacement?</span><button class="text-button" type="button" data-action="cancel-vocabulary-delete">Cancel</button><button class="text-button vocabulary-delete" type="button" data-action="confirm-vocabulary-delete" data-vocabulary-id="${escapeHtml(entry.id)}">Delete</button>`
+              : `<button class="text-button" type="button" data-action="edit-vocabulary" data-vocabulary-id="${escapeHtml(entry.id)}">Edit</button><button class="text-button" type="button" data-action="toggle-vocabulary" data-vocabulary-id="${escapeHtml(entry.id)}">${entry.enabled ? "Disable" : "Enable"}</button><button class="text-button vocabulary-delete" type="button" data-action="request-vocabulary-delete" data-vocabulary-id="${escapeHtml(entry.id)}">Delete</button>`}
+          </div>
+        </li>
+      `;
+    }).join("")
+    : `<li class="vocabulary-ledger-empty">${vocabulary.loading ? "Checking saved replacements…" : "No local replacements yet. Add an exact Before → After correction below."}</li>`;
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="start-sheet vocabulary-sheet" role="dialog" aria-modal="true" aria-labelledby="vocabulary-sheet-title">
+        <div class="sheet-head">
+          <div><p class="eyebrow">Transcript vocabulary</p><h2 id="vocabulary-sheet-title">Keep exact words consistent.</h2><p>These local Before → After replacements apply to future note regenerations. They do not rewrite this transcript, change the words shown here, or regenerate a note.</p></div>
+          <button class="icon-button" type="button" data-action="close-modal" aria-label="Close vocabulary">×</button>
+        </div>
+        <section class="vocabulary-ledger" aria-labelledby="vocabulary-ledger-title">
+          <div class="vocabulary-ledger-head"><h3 id="vocabulary-ledger-title">Correction ledger</h3><span>${vocabulary.entries?.length || 0} saved</span></div>
+          <ul>${rows}</ul>
+        </section>
+        <form data-form="vocabulary">
+          <div class="vocabulary-form-head"><h3>${editing ? "Edit replacement" : "Add replacement"}</h3>${editing ? `<button class="text-button" type="button" data-action="cancel-vocabulary-edit">Cancel edit</button>` : ""}</div>
+          <div class="vocabulary-fields">
+            <label class="field-label" for="vocabulary-before-input">Before
+              <input class="meeting-title-input" id="vocabulary-before-input" data-field="vocabulary-before" data-meeting-id="${escapeHtml(vocabulary.meetingId)}" maxlength="256" value="${escapeHtml(vocabulary.sourcePhrase)}" placeholder="Exact transcript spelling" autocomplete="off" />
+            </label>
+            <span class="vocabulary-arrow" aria-hidden="true">→</span>
+            <label class="field-label" for="vocabulary-after-input">After
+              <input class="meeting-title-input" id="vocabulary-after-input" data-field="vocabulary-after" data-meeting-id="${escapeHtml(vocabulary.meetingId)}" maxlength="256" value="${escapeHtml(vocabulary.preferredReplacement)}" placeholder="Preferred spelling" autocomplete="off" />
+            </label>
+          </div>
+          <p class="vocabulary-help">Exact, case-sensitive matches only. Each phrase can be up to 256 characters.</p>
+          <div class="sheet-actions">
+            <button class="button button-quiet" type="button" data-action="close-modal">Close</button>
+            <button class="button button-primary" type="submit" ${saving || !vocabulary.sourcePhrase.trim() || !vocabulary.preferredReplacement.trim() ? "disabled" : ""}>${saving ? "Saving…" : editing ? "Save replacement" : "Add replacement"}</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  `;
+}
+
+function retryWarningText(warning) {
+  if (typeof warning === "string") return warning;
+  if (warning && typeof warning.message === "string") return warning.message;
+  return "Yawn reported a warning for this transcript.";
+}
+
+function renderRetryWarnings(warnings, label) {
+  if (!Array.isArray(warnings) || !warnings.length) return "";
+  return `<section class="retry-warnings" aria-label="${escapeHtml(label)} warnings"><h4>${escapeHtml(label)} warnings</h4><ul>${warnings.map((warning) => `<li>${escapeHtml(retryWarningText(warning))}</li>`).join("")}</ul></section>`;
+}
+
+function retryQualityObservation(observation) {
+  return `<li><span>${escapeHtml(observation.kind)}</span><strong>${escapeHtml(observation.detail)}</strong></li>`;
+}
+
+function renderRetryQuality(quality) {
+  const presentation = transcriptRetryQualityPresentation(quality);
+  return `
+    <section class="retry-quality" data-state="${escapeHtml(presentation.state)}" aria-labelledby="retry-quality-heading">
+      <div><h3 id="retry-quality-heading">Capture quality</h3><p>${escapeHtml(presentation.message)}</p></div>
+      ${presentation.observations.length ? `<ul>${presentation.observations.map(retryQualityObservation).join("")}</ul>` : ""}
+    </section>
+  `;
+}
+
+function renderRetryRecordingDevice(device) {
+  const presentation = recordingDevicePresentation(device);
+  return `
+    <section class="retry-quality" data-state="${escapeHtml(presentation.state)}" aria-labelledby="retry-device-heading">
+      <div><h3 id="retry-device-heading">${escapeHtml(presentation.title)}</h3><p>${escapeHtml(presentation.detail)}</p></div>
+      ${presentation.action ? `<button class="button button-quiet button-small" type="button" data-action="${presentation.action.action}">${escapeHtml(presentation.action.label)}</button>` : ""}
+    </section>
+  `;
+}
+
+function renderRetryComparisonTurns(turns, label) {
+  const rows = Array.isArray(turns) ? turns : [];
+  return `
+    <section class="retry-transcript-column" aria-labelledby="retry-${label}-heading">
+      <header><p class="eyebrow">${escapeHtml(label === "current" ? "Retained transcript" : "New local result")}</p><h3 id="retry-${label}-heading">${label === "current" ? "Current" : "Retry candidate"}</h3></header>
+      ${renderRetryWarnings(label === "current" ? state.transcriptRetry?.current?.warnings : state.transcriptRetry?.candidate?.warnings, label === "current" ? "Current transcript" : "Retry candidate")}
+      <div class="retry-transcript-turns" tabindex="0" aria-label="${escapeHtml(label === "current" ? "Current transcript turns" : "Retry candidate transcript turns")}">
+        ${rows.length ? rows.map((turn) => {
+    const speaker = transcriptSpeakerLabel(turn);
+    return `<div class="transcript-line ${turn.withheld ? "withheld" : ""}">
+              <div class="transcript-line-meta"><time>${escapeHtml(timeLabel(turn.start))}</time>${speaker ? `<span>${escapeHtml(speaker)}</span>` : ""}</div>
+              <p>${turn.withheld ? "This turn was withheld by the voice check." : escapeHtml(turn.text)}</p>
+            </div>`;
+  }).join("") : `<p class="transcript-empty">No transcript turns are available for this comparison.</p>`}
+      </div>
+    </section>
+  `;
+}
+
+function renderTranscriptRetrySheet() {
+  const retry = state.transcriptRetry;
+  if (!retry?.operationId) return "";
+  const deciding = state.busyAction === "decide-transcript-retry";
+  // The warning is about losing a generated note, so it is only true when one
+  // exists. "transcript-only" is the same signal the note card reads to say
+  // "No meeting note yet." An unknown or still-loading note state keeps the
+  // warning, because warning is the fail-safe direction.
+  const hasNoGeneratedNote = state.selected?.note?.state === "transcript-only";
+  return `
+    <div class="modal-backdrop" role="presentation">
+      <section class="start-sheet transcript-retry-sheet" role="dialog" aria-modal="true" aria-labelledby="transcript-retry-sheet-title">
+        <div class="sheet-head">
+          <div><p class="eyebrow">Transcript retry</p><h2 id="transcript-retry-sheet-title">Compare before changing the source.</h2><p>Nothing changes until you choose. The retained transcript stays as it is unless you explicitly use this retry.</p></div>
+          <button class="icon-button" type="button" data-action="decide-retry-later" aria-label="Decide later">×</button>
+        </div>
+        ${renderRetryQuality(retry.quality)}
+        ${renderRetryRecordingDevice(retry.recordingDevice)}
+        <div class="retry-transcript-comparison">
+          ${renderRetryComparisonTurns(retry.current?.turns, "current")}
+          ${renderRetryComparisonTurns(retry.candidate?.turns, "candidate")}
+        </div>
+        ${hasNoGeneratedNote ? "" : `<section class="retry-use-warning" aria-labelledby="retry-use-warning-heading"><h3 id="retry-use-warning-heading">Using this retry clears the current generated note.</h3><p>You will need to regenerate the note from the selected retry. Yawn will not regenerate it automatically.</p></section>`}
+        <div class="sheet-actions retry-sheet-actions">
+          <button class="button button-quiet" type="button" data-action="decide-retry-later" ${deciding ? "disabled" : ""}>Decide later</button>
+          <button class="button button-secondary" type="button" data-action="keep-current-transcript" ${deciding ? "disabled" : ""}>${deciding ? "Saving decision…" : "Keep current"}</button>
+          <button class="button button-danger" type="button" data-action="use-retry-transcript" ${deciding ? "disabled" : ""}>${deciding ? "Saving decision…" : "Use retry"}</button>
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+async function saveVocabulary() {
+  const vocabulary = state.vocabulary;
+  if (!vocabulary || !vocabulary.sourcePhrase.trim() || !vocabulary.preferredReplacement.trim()) return;
+  const payload = {
+    meetingId: vocabulary.meetingId,
+    sourceTranscriptSha256: vocabulary.sourceTranscriptSha256,
+    sourcePhrase: vocabulary.sourcePhrase.trim(),
+    preferredReplacement: vocabulary.preferredReplacement.trim(),
+  };
+  await runBusy("vocabulary-save", async () => {
+    const response = vocabulary.editingId
+      ? await invoke("local_vocabulary_edit", { ...payload, id: vocabulary.editingId })
+      : await invoke("local_vocabulary_add", payload);
+    if (state.vocabulary?.meetingId !== vocabulary.meetingId) return;
+    state.vocabulary = { ...state.vocabulary, entries: response.entries || [], loading: false };
+    resetVocabularyDraft();
+    state.notice = "Local vocabulary saved. Future note regenerations will use it.";
+  });
+}
+
+function editVocabulary(id) {
+  const entry = state.vocabulary?.entries?.find((candidate) => candidate.id === id);
+  if (!entry || !state.vocabulary) return;
+  state.vocabulary = {
+    ...state.vocabulary,
+    editingId: id,
+    pendingDeleteId: "",
+    sourcePhrase: entry.sourcePhrase,
+    preferredReplacement: entry.preferredReplacement,
+  };
+  render();
+  queueMicrotask(() => root.querySelector("#vocabulary-before-input")?.focus());
+}
+
+async function setVocabularyEnabled(id, enabled) {
+  const vocabulary = state.vocabulary;
+  if (!vocabulary) return;
+  await runBusy("vocabulary-save", async () => {
+    const response = await invoke("local_vocabulary_set_enabled", {
+      meetingId: vocabulary.meetingId,
+      sourceTranscriptSha256: vocabulary.sourceTranscriptSha256,
+      id,
+      enabled,
+    });
+    if (state.vocabulary?.meetingId === vocabulary.meetingId) {
+      state.vocabulary = { ...state.vocabulary, entries: response.entries || [], loading: false };
+    }
+  });
+}
+
+async function deleteVocabulary(id) {
+  const vocabulary = state.vocabulary;
+  if (!vocabulary) return;
+  await runBusy("vocabulary-save", async () => {
+    const response = await invoke("local_vocabulary_delete", {
+      meetingId: vocabulary.meetingId,
+      sourceTranscriptSha256: vocabulary.sourceTranscriptSha256,
+      id,
+    });
+    if (state.vocabulary?.meetingId === vocabulary.meetingId) {
+      state.vocabulary = { ...state.vocabulary, entries: response.entries || [], loading: false, pendingDeleteId: "" };
+      if (state.vocabulary.editingId === id) resetVocabularyDraft();
+    }
+  });
+}
+
 function renderMeetingDeletionSheet() {
   const selection = state.selected;
   if (!selection) return "";
@@ -722,7 +1291,9 @@ function setLibraryNoteSaveCopy() {
 }
 
 function reportError(error) {
-  state.error = String(error instanceof Error ? error.message : error).replace(/^Error:\s*/, "").trim() || "Yawn could not complete that action.";
+  state.error = errorRecoveryPresentation(error, {
+    hasSelectedMeeting: Boolean(state.selected?.row?.meetingId),
+  });
   render();
 }
 
@@ -875,6 +1446,7 @@ async function loadSelectedMeeting(row) {
   const transcript = note.transcriptHandle
     ? await invoke("library_open_transcript", { handle: note.transcriptHandle })
     : null;
+  const pendingRetry = await loadPendingTranscriptRetry(note, transcript);
   const operatorNote = note.operatorNote || { text: "", unreadable: false };
   state.meetingManagementOpen = false;
   state.transcriptQuery = "";
@@ -882,12 +1454,141 @@ async function loadSelectedMeeting(row) {
     row,
     note,
     transcript,
+    transcriptRetry: pendingRetry,
     claimEvidence: {},
     operatorNoteDraft: operatorNote.text || "",
     operatorNoteSaveQueue: Promise.resolve(),
     operatorNoteSaveState: operatorNote.unreadable ? "unreadable" : operatorNote.text ? "saved" : "local",
   };
+  state.audioPlayback = { state: "idle", source: null, message: "No recording is playing." };
   state.activeView = "meeting";
+}
+
+async function playRetainedAudio(source) {
+  const note = state.selected?.note;
+  const handle = source === "microphone"
+    ? note?.microphonePlaybackHandle
+    : source === "system"
+      ? note?.systemPlaybackHandle
+      : "";
+  if (!handle) return;
+  await runBusy(`play-${source}`, async () => {
+    const response = await invoke("library_play_retained_audio", { handle });
+    state.audioPlayback = response;
+    if (response.state !== "playing") throw new Error(response.message || "Retained audio is unavailable. Reopen Library and try again.");
+  });
+}
+
+async function stopRetainedAudio() {
+  const meetingId = state.selected?.row?.meetingId;
+  await runBusy("stop-retained-audio", async () => {
+    const response = await invoke("library_stop_retained_audio");
+    state.notice = response.message || "Playback stopped.";
+    if (meetingId) await reopenSelectedMeeting(meetingId);
+    else state.audioPlayback = response;
+  });
+}
+
+async function refreshRetainedAudioPlayback() {
+  if (!state.selected || state.audioPlayback?.state !== "playing" || audioPlaybackPollActive) return;
+  audioPlaybackPollActive = true;
+  try {
+    const response = await invoke("library_retained_audio_playback_status");
+    if (response.state === "completed") {
+      const meetingId = state.selected?.row?.meetingId;
+      state.notice = response.message || "The recording finished.";
+      if (meetingId) await reopenSelectedMeeting(meetingId);
+      else state.audioPlayback = response;
+    } else {
+      state.audioPlayback = response;
+    }
+    render();
+  } catch (error) {
+    state.audioPlayback = { state: "unavailable", source: null, message: "Retained audio is unavailable. Reopen Library and try again." };
+    reportError(error);
+  } finally {
+    audioPlaybackPollActive = false;
+  }
+}
+
+async function loadPendingTranscriptRetry(note, transcript) {
+  const retry = transcriptRetryContext(note, transcript);
+  if (!retry) return null;
+  try {
+    const pending = await invoke("transcript_retry_pending", {
+      meetingId: retry.meetingId,
+      sourceTranscriptSha256: retry.sourceTranscriptSha256,
+    });
+    return transcriptRetryPresentation({
+      meetingId: retry.meetingId,
+      transcriptMeetingId: transcript?.meetingId,
+      sourceTranscriptSha256: retry.sourceTranscriptSha256,
+      audioRetentionState: note?.audioRetention?.state,
+      capture: state.snapshot?.capture,
+      recovery: meetingRecoveryPresentation(note, transcript, state.generatingMeetingId),
+      pending,
+    })?.pending || null;
+  } catch {
+    // A pending candidate is a convenience. A failed check must not make the
+    // retained meeting unreadable or claim that a retry exists.
+    return null;
+  }
+}
+
+async function openTranscriptRetry() {
+  const selection = state.selected;
+  const retry = transcriptRetryContext(selection?.note, selection?.transcript, selection?.transcriptRetry);
+  if (!selection || !retry) return;
+  if (retry.pending) {
+    state.transcriptRetry = { ...retry.pending, phase: "ready" };
+    state.modal = "transcript-retry";
+    render();
+    queueMicrotask(() => root.querySelector("[data-action='decide-retry-later']")?.focus());
+    return;
+  }
+  state.transcriptRetry = { ...retry, phase: "starting" };
+  render();
+  try {
+    const comparison = await invoke("transcript_retry_start", {
+      meetingId: retry.meetingId,
+      sourceTranscriptSha256: retry.sourceTranscriptSha256,
+    });
+    if (state.selected !== selection) return;
+    selection.transcriptRetry = comparison;
+    state.transcriptRetry = { ...comparison, phase: "ready" };
+    state.modal = "transcript-retry";
+    render();
+    queueMicrotask(() => root.querySelector("[data-action='decide-retry-later']")?.focus());
+  } catch (error) {
+    if (state.selected === selection) state.transcriptRetry = null;
+    reportError(error);
+  }
+}
+
+async function decideTranscriptRetry(decision) {
+  const selection = state.selected;
+  const retry = state.transcriptRetry;
+  if (!selection?.row?.meetingId || !retry?.operationId || !["keep-current", "use-retry"].includes(decision)) return;
+  await flushSelectedNoteSave();
+  await runBusy("decide-transcript-retry", async () => {
+    const response = await invoke("transcript_retry_decide", {
+      meetingId: retry.meetingId,
+      operationId: retry.operationId,
+      sourceTranscriptSha256: retry.sourceTranscriptSha256,
+      candidateTranscriptSha256: retry.candidateTranscriptSha256,
+      decision,
+    });
+    if (!response?.outcome) {
+      throw new Error(response.message || "Yawn could not save that transcript decision.");
+    }
+    if (state.selected !== selection) return;
+    state.modal = "";
+    state.transcriptRetry = null;
+    state.notice = response.message || (decision === "use-retry"
+      ? "The retry is now the selected transcript. Regenerate the meeting note when you are ready."
+      : "The retained transcript remains selected.");
+    await reopenSelectedMeeting(selection.row.meetingId);
+  });
 }
 
 async function reopenSelectedMeeting(meetingId) {
@@ -928,6 +1629,31 @@ async function generateSelectedNote() {
     }
     render();
   }
+}
+
+async function restoreSelectedWithheldTurn(sourceTurnIndex) {
+  const selection = state.selected;
+  const transcript = selection?.transcript;
+  const action = withheldTurnPresentation(
+    transcript?.turns?.find((turn) => Number(turn.sourceTurnIndex) === sourceTurnIndex),
+    {
+      meetingId: selection?.row?.meetingId,
+      meetingHandle: selection?.row?.handle,
+      transcriptMeetingId: transcript?.meetingId,
+      transcriptSha256: transcript?.currentTranscriptSha256,
+      capture: state.snapshot?.capture,
+    },
+  );
+  if (!action || !selection?.row?.meetingId || !transcript?.currentTranscriptSha256) return;
+  const meetingId = selection.row.meetingId;
+  await runBusy("restore-withheld-turn", async () => {
+    await invoke("restore_withheld_turn", {
+      meetingId,
+      sourceTranscriptSha256: transcript.currentTranscriptSha256,
+      sourceTurnIndex: action.sourceTurnIndex,
+    });
+    await reopenSelectedMeeting(meetingId);
+  });
 }
 
 function openMeetingRename() {
@@ -1095,7 +1821,9 @@ function queueNoteSave(text = state.noteDraft, meetingId = state.snapshot?.meeti
     }
   }).catch((error) => {
     state.noteSaveState = "local";
-    state.error = String(error).replace(/^Error:\s*/, "") || "Yawn could not save this note.";
+    state.error = errorRecoveryPresentation(error || "Yawn could not save this note.", {
+      hasSelectedMeeting: Boolean(state.selected?.row?.meetingId),
+    });
     render();
   });
   return state.noteSaveQueue;
@@ -1132,7 +1860,9 @@ function queueSelectedNoteSave(text = state.selected?.operatorNoteDraft, selecti
     .catch((error) => {
       if (state.selected !== selection) return;
       selection.operatorNoteSaveState = "local";
-      state.error = String(error).replace(/^Error:\s*/, "") || "Yawn could not save this note.";
+      state.error = errorRecoveryPresentation(error || "Yawn could not save this note.", {
+        hasSelectedMeeting: Boolean(state.selected?.row?.meetingId),
+      });
       render();
     });
   return selection.operatorNoteSaveQueue;
@@ -1168,6 +1898,9 @@ async function flushSelectedNoteSave() {
 
 async function openMeetings() {
   await flushSelectedNoteSave();
+  if (invoke && state.audioPlayback?.state === "playing") {
+    state.audioPlayback = await invoke("library_stop_retained_audio");
+  }
   state.selected = null;
   state.meetingManagementOpen = false;
   state.transcriptQuery = "";
@@ -1177,6 +1910,17 @@ async function openMeetings() {
     return;
   }
   await runBusy("library", refreshLibrary);
+}
+
+async function refreshLibraryFromRecovery() {
+  if (!invoke) return;
+  await runBusy("refresh-library", refreshLibrary);
+}
+
+async function refreshSelectedMeetingFromRecovery() {
+  const meetingId = state.selected?.row?.meetingId;
+  if (!meetingId || !invoke) return;
+  await runBusy("refresh-selected-meeting", () => reopenSelectedMeeting(meetingId));
 }
 
 function transcriptTurns(scope) {
@@ -1256,18 +2000,57 @@ function handleClick(event) {
   const action = control.dataset.action;
   if (action === "home" || action === "meetings") void openMeetings();
   else if (action === "open-start") openStart();
-  else if (action === "close-start" || action === "close-modal") { state.modal = ""; render(); }
+  else if (action === "close-start" || action === "close-modal") {
+    closeModal();
+    render();
+  }
   else if (action === "start-recording") void startRecording();
   else if (action === "stop-recording") void stopRecording();
   else if (action === "dismiss-current") void dismissCurrent();
   else if (action === "record-another") void recordAnother();
   else if (action === "open-meeting") void openMeeting(control.dataset.handle);
+  else if (action === "open-speaker-correction") openSpeakerCorrection(Number(control.dataset.sourceTurnIndex));
+  else if (action === "open-vocabulary") void openVocabulary();
+  else if (action === "start-transcript-retry") void openTranscriptRetry();
+  else if (action === "decide-retry-later") {
+    closeModal();
+    render();
+  }
+  else if (action === "keep-current-transcript") void decideTranscriptRetry("keep-current");
+  else if (action === "use-retry-transcript") void decideTranscriptRetry("use-retry");
+  else if (action === "edit-vocabulary") editVocabulary(control.dataset.vocabularyId);
+  else if (action === "cancel-vocabulary-edit") {
+    resetVocabularyDraft();
+    render();
+    queueMicrotask(() => root.querySelector("#vocabulary-before-input")?.focus());
+  }
+  else if (action === "request-vocabulary-delete" && state.vocabulary) {
+    state.vocabulary = { ...state.vocabulary, pendingDeleteId: control.dataset.vocabularyId };
+    render();
+  }
+  else if (action === "cancel-vocabulary-delete" && state.vocabulary) {
+    state.vocabulary = { ...state.vocabulary, pendingDeleteId: "" };
+    render();
+  }
+  else if (action === "toggle-vocabulary") {
+    const entry = state.vocabulary?.entries?.find((candidate) => candidate.id === control.dataset.vocabularyId);
+    if (entry) void setVocabularyEnabled(entry.id, !entry.enabled);
+  }
+  else if (action === "confirm-vocabulary-delete") void deleteVocabulary(control.dataset.vocabularyId);
+  else if (action === "restore-withheld-turn") void restoreSelectedWithheldTurn(Number(control.dataset.sourceTurnIndex));
+  else if (action === "use-source-speaker" && state.speakerCorrection) {
+    state.speakerCorrectionDraft = state.speakerCorrection.sourceLabel;
+    render();
+    queueMicrotask(() => root.querySelector("#speaker-name-input")?.focus());
+  }
   else if (action === "open-claim-evidence") void openClaimEvidence(Number(control.dataset.ordinal));
   else if (action === "toggle-meeting-management") {
     state.meetingManagementOpen = !state.meetingManagementOpen;
     render();
   }
   else if (action === "generate-note") void generateSelectedNote();
+  else if (action === "play-retained-audio") void playRetainedAudio(control.dataset.source);
+  else if (action === "stop-retained-audio") void stopRetainedAudio();
   else if (action === "rename-meeting") openMeetingRename();
   else if (action === "delete-recording") openMeetingDeletion("delete-recording");
   else if (action === "delete-transcript") openMeetingDeletion("delete-transcript");
@@ -1285,6 +2068,8 @@ function handleClick(event) {
     queueMicrotask(() => root.querySelector("[data-field='transcript-search']")?.focus());
   }
   else if (action === "retry-startup") void retryStartup();
+  else if (action === "refresh-library") void refreshLibraryFromRecovery();
+  else if (action === "refresh-selected-meeting") void refreshSelectedMeetingFromRecovery();
   else if (action === "install-model") void installModel(control.dataset.modelId).catch(reportError);
   else if (action === "request-microphone") void requestPermission("microphone");
   else if (action === "request-system-audio") void requestPermission("system-audio");
@@ -1321,6 +2106,15 @@ function handleInput(event) {
   if (event.target.dataset.field === "meeting-title") {
     state.renameDraft = event.target.value;
   }
+  if (event.target.dataset.field === "speaker-name") {
+    state.speakerCorrectionDraft = event.target.value;
+  }
+  if (event.target.dataset.field === "vocabulary-before" && state.vocabulary) {
+    state.vocabulary = { ...state.vocabulary, sourcePhrase: event.target.value };
+  }
+  if (event.target.dataset.field === "vocabulary-after" && state.vocabulary) {
+    state.vocabulary = { ...state.vocabulary, preferredReplacement: event.target.value };
+  }
 }
 
 function handleChange(event) {
@@ -1337,7 +2131,11 @@ function handleChange(event) {
 }
 
 function handleKeydown(event) {
-  if (event.key === "Escape" && state.modal) { state.modal = ""; render(); return; }
+  if (event.key === "Escape" && state.modal) {
+    closeModal();
+    render();
+    return;
+  }
   if (event.key === "Escape" && state.meetingManagementOpen) { state.meetingManagementOpen = false; render(); return; }
   if (!event.metaKey || event.altKey || event.ctrlKey) return;
   if (event.key.toLowerCase() === "r" && canOpenStart(state.snapshot, state.permissions)) {
@@ -1351,9 +2149,12 @@ function handleKeydown(event) {
 }
 
 function handleSubmit(event) {
-  if (event.target.dataset.form !== "rename-meeting") return;
+  const form = event.target.dataset.form;
+  if (!["rename-meeting", "speaker-correction", "vocabulary"].includes(form)) return;
   event.preventDefault();
-  void saveMeetingTitle();
+  if (form === "rename-meeting") void saveMeetingTitle();
+  else if (form === "speaker-correction") void saveSpeakerCorrection();
+  else void saveVocabulary();
 }
 
 async function initialize() {
@@ -1366,13 +2167,14 @@ async function initialize() {
       refreshPermissions(),
     ]);
   } catch (error) {
-    state.error = String(error).replace(/^Error:\s*/, "") || "Yawn could not open its local workspace.";
+    state.error = errorRecoveryPresentation(error || "Yawn could not open its local workspace.");
   }
   render();
   window.setInterval(() => {
     if (shouldPollSnapshot(state.snapshot)) {
       void refreshSnapshot().catch(reportError);
     }
+    void refreshRetainedAudioPlayback();
   }, 900);
 }
 

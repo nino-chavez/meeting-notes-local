@@ -25,6 +25,9 @@ fn production_config_is_the_signed_product_lane() {
         "library_snapshot",
         "library_set_meeting_title",
         "library_open_note",
+        "library_play_retained_audio",
+        "library_retained_audio_playback_status",
+        "library_stop_retained_audio",
         "library_open_transcript",
         "library_open_transcript_file",
         "library_save_operator_note",
@@ -43,7 +46,9 @@ fn production_config_is_the_signed_product_lane() {
 #[test]
 fn preview_is_the_only_optional_build_lane() {
     let preview = config(include_str!("../tauri.preview.conf.json"));
+    let fixture = config(include_str!("../tauri.fixture.conf.json"));
     assert!(validate(BuildMode::Preview, &preview).is_ok());
+    assert!(validate(BuildMode::Preview, &fixture).is_ok());
     assert_eq!(BuildMode::from_enabled_features(false), BuildMode::Production);
     assert_eq!(BuildMode::from_enabled_features(true), BuildMode::Preview);
 }
@@ -57,7 +62,8 @@ fn product_builds_ship_the_complete_note_runtime() {
     // reads as a build defect rather than an honest refusal.
     let production = config(include_str!("../tauri.conf.json"));
     let preview = config(include_str!("../tauri.preview.conf.json"));
-    for config in [&production, &preview] {
+    let fixture = config(include_str!("../tauri.fixture.conf.json"));
+    for config in [&production, &preview, &fixture] {
         let resources = config["bundle"]["resources"].as_object().unwrap();
         for path in [
             "../runtime/note-bridge.py",
@@ -75,8 +81,26 @@ fn product_builds_ship_the_complete_note_runtime() {
 fn product_and_preview_reject_each_others_identity() {
     let production = config(include_str!("../tauri.conf.json"));
     let preview = config(include_str!("../tauri.preview.conf.json"));
+    let fixture = config(include_str!("../tauri.fixture.conf.json"));
     assert!(validate(BuildMode::Production, &preview).is_err());
+    assert!(validate(BuildMode::Production, &fixture).is_err());
     assert!(validate(BuildMode::Preview, &production).is_err());
+}
+
+#[test]
+fn fixture_rejects_preview_and_production_hybrids() {
+    let production = config(include_str!("../tauri.conf.json"));
+    let preview = config(include_str!("../tauri.preview.conf.json"));
+    let fixture = config(include_str!("../tauri.fixture.conf.json"));
+
+    let mut preview_identity = fixture.clone();
+    preview_identity["identifier"] = preview["identifier"].clone();
+    assert!(validate(BuildMode::Preview, &preview_identity).is_err());
+
+    let mut production_window = fixture.clone();
+    production_window["app"]["windows"][0]["label"] =
+        production["app"]["windows"][0]["label"].clone();
+    assert!(validate(BuildMode::Preview, &production_window).is_err());
 }
 
 #[test]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-correct-speaker-name"
+description = "Enables the correct_speaker_name command without any pre-configured scope."
+commands.allow = ["correct_speaker_name"]
+
+[[permission]]
+identifier = "deny-correct-speaker-name"
+description = "Denies the correct_speaker_name command without any pre-configured scope."
+commands.deny = ["correct_speaker_name"]

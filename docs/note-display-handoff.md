@@ -2,98 +2,112 @@
 
 ## Bottom line
 
-The backend generation chain is confirmed working end to end: a real meeting's
-note generates, publishes, re-inspects, and commits into `meeting.json`
-(`lifecycle: "ready"`, `current_note` set), and the library-rebuild
-re-validation (`note.project`) that reads it back succeeds. That part is done,
-tested, and pushed — see `docs/note-runtime-decision.md`'s "Operational
-close-out, continued" entry for the full account of what was found and fixed
-this session.
+The generated note renders in the desktop UI after the meeting is dismissed
+and reopened from the meetings list. This was verified live on 2026-08-16 with
+meeting `fdd59c81-30d7-480b-95d1-3753b9bad28e`.
 
-What's still broken: the note did not actually display in the app UI when the
-operator looked. My own "it works" verification for that last mile was weak
-and most likely wrong — see below. This has not been re-diagnosed live; it's
-a lead, not a confirmed root cause.
+The `630` detail view showed real generated content, not just an error-free
+shell. It rendered `POINT` cards containing `All right, we're good to go.` and
+`I already did the recap for it.`, plus the retained source transcript. No
+temporary instrumentation was needed.
 
-## Why my earlier "confirmed" claim should not be trusted
+The remaining issue is narrower: the capture/resume screen has no generated-
+note view. The operator must choose **Back to Meetings**, which dismisses the
+current meeting, before that meeting can appear in the library and its note can
+be opened.
 
-I checked for the *absence* of a `"Generate note"` button and *absence* of
-specific error-toast text strings in the app's accessibility tree, on a
-freshly relaunched app that happened to land on the meeting's detail view. I
-did not check for the *presence* of actual note content. Absence of a known
-failure signature is not evidence of success — a third, silent empty state
-would pass that check too. Flagging this explicitly so the next session
-doesn't repeat it: any future verification of note display must confirm real
-content (claim text, decision/action labels, etc.) renders, not just that
-known failure text is missing.
+## What the live check proved
 
-## A concrete, untested lead
+The app was already on the meetings list after the operator had dismissed the
+current meeting. The first row was `630`, dated Aug 11, 2026. A coordinate
+click on the row opened the meeting detail view. The detail view visibly
+contained:
 
-`apps/desktop/ui/main.js`'s note-detail view calls the Tauri command
-`library_open_note` (`apps/desktop/src-tauri/src/main.rs:4432`), which reads
-through `ApplicationState::with_preview_library`
-(`apps/desktop/src-tauri/src/main.rs:824`). That helper does **not** lazily
-rebuild anything — if `state.preview_library` (a `Mutex<Option<LibraryReader>>`,
-starts `None` on every process launch, `main.rs:211`) is `None`, it returns
-`unavailable()` immediately (`main.rs:838-840`) without ever calling
-`rebuild_with_projector`.
+- the title `630` and state `Note`
+- the section `Draft from transcript`
+- generated cards labeled `POINT`
+- exact claim text from the published note
+- `Show source` controls
+- the retained source transcript with matching text
 
-The only thing that populates `preview_library` is the `library_snapshot`
-command (`main.rs:2900`, via `library_snapshot_with` → `rebuild_with_projector`
-→ `*library = Some(reader)`), which runs when the frontend loads the
-meetings list ("Back to Meetings" view). If a fresh app process is
-navigated (or restores window state) directly into a meeting's detail view
-without the meetings-list command having run first in that process,
-`library_open_note` would return `unavailable_note("")` — not an error, not a
-"Generate note" prompt, just an unavailable/empty response — for a note that
-is fully valid on disk.
+The published fixture contains 61 claims, all typed `point`. `POINT` is
+therefore the only generated-claim label expected in this meeting; the absence
+of `DECISION` or `ACTION` cards is not a rendering failure for this fixture.
 
-This matches what likely happened during my last verification pass: I
-relaunched the app, it restored directly onto the meeting-detail view (no
-explicit "Back to Meetings" click in that fresh process before checking), and
-I only checked for negative signals that an `unavailable_note` response
-wouldn't necessarily produce.
+This closes the original last-mile verification gap. The check used positive
+content evidence; it did not infer success from the absence of an error.
 
-**Next session, start here:**
+## The earlier cache hypothesis was wrong
 
-1. Launch the app fresh and deliberately click into "Back to Meetings" (the
-   list view) *first*, confirming that view loads, before opening any
-   specific meeting. This is what calls `library_snapshot` and populates
-   `preview_library`.
-2. Then open the meeting used for this session's test run (meeting id
-   `fdd59c81-30d7-480b-95d1-3753b9bad28e`, its published note is
-   `notes/ac2f2583c10fb0c55e312f1a61283bd565aba1f499021cb7201e96e275a33a1c.json`
-   under that meeting's directory) and check whether the note now renders.
-3. If it still doesn't render even after an explicit meetings-list visit,
-   the `unavailable_note` hypothesis is wrong — instrument
-   `library_open_note` / `open_note` (`apps/desktop/src-tauri/src/library_reader.rs:770`)
-   the same way this session instrumented the generation chain (a
-   `debug_note`-style temporary log to `/tmp`, reverted before commit), and
-   trace exactly what response shape reaches `main.js:874`
-   (`const note = await invoke("library_open_note", ...)`).
-4. Also worth checking early: whether `main.js`'s meeting-open flow calls
-   `library_snapshot` (or an equivalent per-meeting refresh) itself before
-   calling `library_open_note`, independent of whether the operator visited
-   the list view — if it does, the lead above is wrong and the bug is
-   somewhere else in the response path.
+`initialize()` calls `refreshLibrary()` at every frontend boot. That invokes
+`library_snapshot`, rebuilds the reader, and stores it in `preview_library`.
+The call runs alongside the initial app snapshot and permission refresh, before
+the final render. A fresh process therefore does not depend on the operator
+visiting the meetings list first to populate this cache.
+
+The selected row also comes from that same library snapshot. The proposed
+ordering — opening a row before any snapshot populated the reader — is not a
+reachable UI path.
+
+## What remains true about the current-meeting screen
+
+`renderCapture()` displays the operator's note editor and the raw transcript.
+It does not read or render generated claims. The library intentionally excludes
+active meetings, so the current meeting cannot be opened through the library at
+the same time.
+
+On a terminal capture state, **Back to Meetings** calls `dismiss_meeting`,
+clears the current meeting projection, and refreshes the library. The dismissed
+meeting can then appear in the list. The live check confirmed that opening it
+from there renders the generated note correctly.
+
+Whether the capture screen should expose the finished generated note before
+dismissal is a product-flow decision. It is not a failure in note generation,
+storage, library opening, or detail rendering.
+
+## Product-quality correction after the render check
+
+The live render proved the old path, but the point-only artifact was not a
+meeting summary: it made the operator review 61 selected transcript excerpts
+and reconstruct the meeting themselves.
+
+The generation path now asks the installed local model for a short overview and
+typed outcomes after it selects transcript evidence. Local validation resolves
+every model evidence ID back to exact transcript spans. It also rejects a
+decision or action unless the cited transcript contains explicit agreement or
+commitment language.
+
+The real `630` transcript now produces three overview points, two proposals,
+and one open question. It produces no decisions or actions because the retained
+evidence does not support those labels. The rendered note leads with the
+overview, groups the proposals under **Ideas discussed**, groups the question
+under **Open questions**, and keeps source evidence one click away.
+
+Ready meetings now expose **Regenerate note**, so an older point-only artifact
+can be replaced without deleting the meeting or transcript. The operation pins
+the prior note in its durable request. A failed replacement keeps that prior
+note current; a passing replacement publishes atomically.
+
+Point-only artifacts remain readable as an honest fallback. The surface says a
+summary was not produced and moves those excerpts under **Review selected
+excerpts** instead of presenting them as the note.
 
 ## Current repo/build state
 
-- Working tree is clean; all code changes from this session are committed
-  and pushed to `main` (commits `bf082ce`, `b045d4d`, `9baa602`, `6d1c84d`,
-  `7df9b9e`).
+- The structured local generation path, meeting-note UI, product brief, tests,
+  and this handoff update are the current uncommitted working-tree changes.
 - No temporary debug instrumentation remains in any source file.
-- The release bundle at `target/release/bundle/macos/Yawn.app` was rebuilt
-  and re-signed after the last code fix (the claim-length cap removal) and
-  passed `codesign --verify --deep --strict` and
-  `scripts/verify-release-bundle.py --signed --admission internal-alpha`
-  (version 0.5.7, internal-alpha, 199 arm64-compatible Mach-O files). The app
-  is not currently running.
-- The test meeting (`fdd59c81-30d7-480b-95d1-3753b9bad28e`) has a fully
-  valid, committed note on disk — confirmed by direct file read and by a
-  standalone script replaying `note_validator.py`'s `project()`
-  re-derivation against the real files, which passes. The gap is specifically
-  in what the desktop UI does with that data, not in the data itself.
+- The app bundle at `target/release/bundle/macos/Yawn.app` was rebuilt with the
+  structured generator and validator. It passes `codesign --verify --deep
+  --strict` and `scripts/verify-release-bundle.py --admission internal-alpha`
+  (version 0.5.7, 169 arm64-compatible Mach-O files). This is local
+  internal-alpha evidence, not notarized release evidence.
+- The test meeting (`fdd59c81-30d7-480b-95d1-3753b9bad28e`) now points to
+  structured note `b26edd82…d25d50`. Durable operation
+  `8eeadf6d-042a-419d-9392-80bcb98eeac4` records the prior note and the accepted
+  replacement. A fresh `note_validator.py::project()` replay returns the six
+  expected typed claims. The real frontend rendered those claim values in its
+  summary-first layout with the regeneration control visible.
 
 ## Do not re-litigate
 

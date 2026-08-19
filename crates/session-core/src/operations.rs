@@ -5,6 +5,9 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::local_vocabulary::{
+    VocabularyRangeReplacement, vocabulary_range_replacements_are_valid,
+};
 use crate::meeting::{ArtifactRef, MeetingLifecycle, MeetingRecord, NoteRevisionRef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -36,6 +39,36 @@ pub struct RestoreWithheldTurnUiArgs {
 pub struct RegenerateNoteUiArgs {
     pub meeting_id: Uuid,
     pub source_transcript_sha256: String,
+    /// Exact speaker-label substitutions for this generation only. The
+    /// retained transcript remains the source record and its digest remains
+    /// the evidence identity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub speaker_label_overrides: Vec<SpeakerLabelOverride>,
+    /// Prompt-only text substitutions tied to exact retained-source spans.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocabulary_replacements: Vec<VocabularyRangeReplacement>,
+}
+
+/// The browser may name only the transcript it is comparing. The desktop
+/// process derives the retained capture and audio identities under its meeting
+/// lease; accepting caller-supplied audio identities would weaken that bound.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranscriptRetryUiArgs {
+    pub meeting_id: Uuid,
+    pub source_transcript_sha256: String,
+}
+
+/// One exact source speaker group and the label the note generator may see.
+///
+/// The closed three-group vocabulary mirrors the capture transcript: the
+/// operator channel, the remote channel, or an unattributed row. It cannot
+/// introduce a new source identity or change any source text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeakerLabelOverride {
+    pub source_speaker: Option<String>,
+    pub replacement: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +84,10 @@ pub struct TranscriptRestoreWorkerArgs {
 pub struct NoteCreateWorkerArgs {
     pub meeting_id: Uuid,
     pub source_transcript_sha256: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub speaker_label_overrides: Vec<SpeakerLabelOverride>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocabulary_replacements: Vec<VocabularyRangeReplacement>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +95,7 @@ pub struct NoteCreateWorkerArgs {
 pub enum ProductOperationKind {
     RestoreWithheldTurn,
     GenerateNote,
+    TranscriptRetry,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +103,7 @@ pub enum ProductOperationKind {
 pub enum UiOperationState {
     Correcting,
     Summarizing,
+    Transcribing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +163,8 @@ pub struct TranscriptRestorationResult {
 pub enum NoteGenerationRequestSchema {
     #[serde(rename = "note-generation-request/1")]
     V1,
+    #[serde(rename = "note-generation-request/2")]
+    V2,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +175,12 @@ pub struct NoteGenerationRequest {
     pub meeting_id: Uuid,
     pub requested_at_epoch_seconds: u64,
     pub source_transcript_sha256: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub speaker_label_overrides: Vec<SpeakerLabelOverride>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vocabulary_replacements: Vec<VocabularyRangeReplacement>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_note: Option<NoteRevisionRef>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -251,6 +298,14 @@ impl RestoreWithheldTurnUiArgs {
 
 impl RegenerateNoteUiArgs {
     pub fn validate(&self) -> Result<(), OperationContractError> {
+        validate_digest(&self.source_transcript_sha256)?;
+        validate_speaker_label_overrides(&self.speaker_label_overrides)?;
+        validate_vocabulary_replacements(&self.vocabulary_replacements)
+    }
+}
+
+impl TranscriptRetryUiArgs {
+    pub fn validate(&self) -> Result<(), OperationContractError> {
         validate_digest(&self.source_transcript_sha256)
     }
 }
@@ -263,7 +318,9 @@ impl TranscriptRestoreWorkerArgs {
 
 impl NoteCreateWorkerArgs {
     pub fn validate(&self) -> Result<(), OperationContractError> {
-        validate_digest(&self.source_transcript_sha256)
+        validate_digest(&self.source_transcript_sha256)?;
+        validate_speaker_label_overrides(&self.speaker_label_overrides)?;
+        validate_vocabulary_replacements(&self.vocabulary_replacements)
     }
 }
 
@@ -277,6 +334,9 @@ impl UiOperationAccepted {
             ) | (
                 ProductOperationKind::GenerateNote,
                 UiOperationState::Summarizing
+            ) | (
+                ProductOperationKind::TranscriptRetry,
+                UiOperationState::Transcribing
             )
         ) {
             return Err(OperationContractError::Malformed(
@@ -338,7 +398,24 @@ impl NoteGenerationRequest {
                 "request time must be positive",
             ));
         }
-        validate_digest(&self.source_transcript_sha256)
+        validate_digest(&self.source_transcript_sha256)?;
+        validate_speaker_label_overrides(&self.speaker_label_overrides)?;
+        validate_vocabulary_replacements(&self.vocabulary_replacements)?;
+        match (self.schema, &self.prior_note) {
+            (NoteGenerationRequestSchema::V1, Some(_)) => Err(OperationContractError::Malformed(
+                "request/1 cannot replace a prior note",
+            )),
+            (_, Some(note)) => {
+                validate_note(note)?;
+                if note.source_transcript_sha256 != self.source_transcript_sha256 {
+                    return Err(OperationContractError::Malformed(
+                        "prior note binds another transcript",
+                    ));
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -423,6 +500,11 @@ impl MeetingOperationCommit {
                 ProductOperationOutcome::NoteRejected,
                 MeetingLifecycle::SummaryFailed,
                 false
+            ) | (
+                ProductOperationKind::GenerateNote,
+                ProductOperationOutcome::NoteRejected,
+                MeetingLifecycle::Ready,
+                true
             )
         );
         if !coherent {
@@ -633,6 +715,10 @@ pub fn validate_note_receipts(
         NoteGenerationStatus::Accepted => ProductOperationOutcome::NoteAccepted,
         NoteGenerationStatus::Rejected => ProductOperationOutcome::NoteRejected,
     };
+    let expected_current_note = match result.status {
+        NoteGenerationStatus::Accepted => result.note.as_ref(),
+        NoteGenerationStatus::Rejected => request.prior_note.as_ref(),
+    };
     if request.operation_id != result.operation_id
         || request.operation_id != commit.operation_id
         || request.meeting_id != result.meeting_id
@@ -643,7 +729,7 @@ pub fn validate_note_receipts(
         || digest_pretty(result)? != commit.result_sha256
         || commit.kind != ProductOperationKind::GenerateNote
         || commit.outcome != expected_outcome
-        || commit.current_note != result.note
+        || commit.current_note.as_ref() != expected_current_note
     {
         return Err(OperationContractError::Malformed(
             "note receipts do not form one operation",
@@ -748,11 +834,13 @@ pub fn classify_note_recovery(
     request.validate()?;
     validate_digest(current_transcript_sha256)?;
     let source_state_matches = current_transcript_sha256 == request.source_transcript_sha256
-        && current_note.is_none()
-        && matches!(
-            lifecycle,
-            MeetingLifecycle::TranscriptReady | MeetingLifecycle::SummaryFailed
-        );
+        && match (&request.prior_note, current_note, lifecycle) {
+            (Some(prior), Some(current), MeetingLifecycle::Ready) => prior == current,
+            (None, None, MeetingLifecycle::TranscriptReady | MeetingLifecycle::SummaryFailed) => {
+                true
+            }
+            _ => false,
+        };
     let Some(result) = result else {
         return if source_state_matches {
             Ok(IncompleteOperationRecovery::RetryRequest)
@@ -775,9 +863,10 @@ pub fn classify_note_recovery(
         NoteGenerationStatus::Accepted => {
             lifecycle == MeetingLifecycle::Ready && current_note == result.note.as_ref()
         }
-        NoteGenerationStatus::Rejected => {
-            lifecycle == MeetingLifecycle::SummaryFailed && current_note.is_none()
-        }
+        NoteGenerationStatus::Rejected => match &request.prior_note {
+            Some(prior) => lifecycle == MeetingLifecycle::Ready && current_note == Some(prior),
+            None => lifecycle == MeetingLifecycle::SummaryFailed && current_note.is_none(),
+        },
     };
     if current_transcript_sha256 == request.source_transcript_sha256 && result_is_applied {
         return Ok(IncompleteOperationRecovery::WriteMissingCommit);
@@ -821,6 +910,57 @@ fn validate_digest(value: &str) -> Result<(), OperationContractError> {
         ));
     }
     Ok(())
+}
+
+fn validate_speaker_label_overrides(
+    overrides: &[SpeakerLabelOverride],
+) -> Result<(), OperationContractError> {
+    if overrides.len() > 3 {
+        return Err(OperationContractError::Malformed(
+            "speaker label overlay has too many source groups",
+        ));
+    }
+    let mut previous = None;
+    for override_ in overrides {
+        let rank = match override_.source_speaker.as_deref() {
+            None => 0,
+            Some("Me") => 1,
+            Some("Them") => 2,
+            _ => {
+                return Err(OperationContractError::Malformed(
+                    "speaker label overlay names an unknown source group",
+                ));
+            }
+        };
+        if previous.is_some_and(|prior| prior >= rank) {
+            return Err(OperationContractError::Malformed(
+                "speaker label overlay source groups are not unique and ordered",
+            ));
+        }
+        previous = Some(rank);
+        if override_.replacement.is_empty()
+            || override_.replacement.len() > 80
+            || override_.replacement.trim() != override_.replacement
+            || override_.replacement.chars().any(char::is_control)
+        {
+            return Err(OperationContractError::Malformed(
+                "speaker label overlay replacement is invalid",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_vocabulary_replacements(
+    replacements: &[VocabularyRangeReplacement],
+) -> Result<(), OperationContractError> {
+    if vocabulary_range_replacements_are_valid(replacements) {
+        Ok(())
+    } else {
+        Err(OperationContractError::Malformed(
+            "vocabulary replacement overlay is invalid",
+        ))
+    }
 }
 
 fn digest_pretty<T: Serialize>(value: &T) -> Result<String, OperationContractError> {
@@ -1248,5 +1388,78 @@ mod tests {
                 IncompleteOperationRecovery::WriteMissingCommit
             );
         }
+    }
+
+    #[test]
+    fn note_overlays_are_bounded_and_absent_from_legacy_wire_shapes() {
+        let mut arguments = NoteCreateWorkerArgs {
+            meeting_id: Uuid::new_v4(),
+            source_transcript_sha256: "a".repeat(64),
+            speaker_label_overrides: Vec::new(),
+            vocabulary_replacements: Vec::new(),
+        };
+        arguments.validate().unwrap();
+        assert!(
+            !serde_json::to_string(&arguments)
+                .unwrap()
+                .contains("speaker_label_overrides")
+        );
+        assert!(
+            !serde_json::to_string(&arguments)
+                .unwrap()
+                .contains("vocabulary_replacements")
+        );
+
+        arguments.speaker_label_overrides = vec![SpeakerLabelOverride {
+            source_speaker: Some("Them".into()),
+            replacement: "Alex".into(),
+        }];
+        arguments.validate().unwrap();
+        assert!(
+            serde_json::to_string(&arguments)
+                .unwrap()
+                .contains("speaker_label_overrides")
+        );
+
+        arguments.speaker_label_overrides[0].source_speaker = Some("Other".into());
+        assert!(arguments.validate().is_err());
+        arguments.speaker_label_overrides.clear();
+        arguments.vocabulary_replacements = vec![VocabularyRangeReplacement {
+            turn: 0,
+            char_start: 1,
+            char_end: 4,
+            source_sha256: "b".repeat(64),
+            replacement: "Kibble".into(),
+        }];
+        arguments.validate().unwrap();
+        assert!(
+            serde_json::to_string(&arguments)
+                .unwrap()
+                .contains("vocabulary_replacements")
+        );
+        arguments.vocabulary_replacements[0].char_end = 1;
+        assert!(arguments.validate().is_err());
+    }
+
+    #[test]
+    fn transcript_retry_ui_arguments_are_exact_and_reject_unknown_fields() {
+        let arguments = TranscriptRetryUiArgs {
+            meeting_id: Uuid::new_v4(),
+            source_transcript_sha256: "a".repeat(64),
+        };
+        arguments.validate().unwrap();
+        assert_eq!(
+            serde_json::to_value(&arguments).unwrap(),
+            serde_json::json!({
+                "meetingId": arguments.meeting_id,
+                "sourceTranscriptSha256": arguments.source_transcript_sha256,
+            })
+        );
+        let mut malformed = serde_json::to_value(arguments).unwrap();
+        malformed
+            .as_object_mut()
+            .unwrap()
+            .insert("unexpected".into(), Value::Bool(true));
+        assert!(serde_json::from_value::<TranscriptRetryUiArgs>(malformed).is_err());
     }
 }

@@ -195,6 +195,12 @@
           "markdownDescription": "Enables the corpus_search command without any pre-configured scope."
         },
         {
+          "description": "Enables the correct_speaker_name command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-correct-speaker-name",
+          "markdownDescription": "Enables the correct_speaker_name command without any pre-configured scope."
+        },
+        {
           "description": "Enables the dismiss_meeting command without any pre-configured scope.",
           "type": "string",
           "const": "allow-dismiss-meeting",
@@ -273,10 +279,22 @@
           "markdownDescription": "Enables the library_open_transcript_file command without any pre-configured scope."
         },
         {
+          "description": "Enables the library_play_retained_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-play-retained-audio",
+          "markdownDescription": "Enables the library_play_retained_audio command without any pre-configured scope."
+        },
+        {
           "description": "Enables the library_rename_folder command without any pre-configured scope.",
           "type": "string",
           "const": "allow-library-rename-folder",
           "markdownDescription": "Enables the library_rename_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_retained_audio_playback_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-retained-audio-playback-status",
+          "markdownDescription": "Enables the library_retained_audio_playback_status command without any pre-configured scope."
         },
         {
           "description": "Enables the library_save_operator_note command without any pre-configured scope.",
@@ -295,6 +313,42 @@
           "type": "string",
           "const": "allow-library-snapshot",
           "markdownDescription": "Enables the library_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the library_stop_retained_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-library-stop-retained-audio",
+          "markdownDescription": "Enables the library_stop_retained_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_vocabulary_add command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-vocabulary-add",
+          "markdownDescription": "Enables the local_vocabulary_add command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_vocabulary_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-vocabulary-delete",
+          "markdownDescription": "Enables the local_vocabulary_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_vocabulary_edit command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-vocabulary-edit",
+          "markdownDescription": "Enables the local_vocabulary_edit command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_vocabulary_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-vocabulary-list",
+          "markdownDescription": "Enables the local_vocabulary_list command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_vocabulary_set_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-vocabulary-set-enabled",
+          "markdownDescription": "Enables the local_vocabulary_set_enabled command without any pre-configured scope."
         },
         {
           "description": "Enables the note_model_settings command without any pre-configured scope.",
@@ -495,6 +549,24 @@
           "markdownDescription": "Enables the transcript_model_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the transcript_retry_decide command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-transcript-retry-decide",
+          "markdownDescription": "Enables the transcript_retry_decide command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the transcript_retry_pending command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-transcript-retry-pending",
+          "markdownDescription": "Enables the transcript_retry_pending command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the transcript_retry_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-transcript-retry-start",
+          "markdownDescription": "Enables the transcript_retry_start command without any pre-configured scope."
+        },
+        {
           "description": "Denies the app_snapshot command without any pre-configured scope.",
           "type": "string",
           "const": "deny-app-snapshot",
@@ -511,6 +583,12 @@
           "type": "string",
           "const": "deny-corpus-search",
           "markdownDescription": "Denies the corpus_search command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the correct_speaker_name command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-correct-speaker-name",
+          "markdownDescription": "Denies the correct_speaker_name command without any pre-configured scope."
         },
         {
           "description": "Denies the dismiss_meeting command without any pre-configured scope.",
@@ -591,10 +669,22 @@
           "markdownDescription": "Denies the library_open_transcript_file command without any pre-configured scope."
         },
         {
+          "description": "Denies the library_play_retained_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-play-retained-audio",
+          "markdownDescription": "Denies the library_play_retained_audio command without any pre-configured scope."
+        },
+        {
           "description": "Denies the library_rename_folder command without any pre-configured scope.",
           "type": "string",
           "const": "deny-library-rename-folder",
           "markdownDescription": "Denies the library_rename_folder command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_retained_audio_playback_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-retained-audio-playback-status",
+          "markdownDescription": "Denies the library_retained_audio_playback_status command without any pre-configured scope."
         },
         {
           "description": "Denies the library_save_operator_note command without any pre-configured scope.",
@@ -613,6 +703,42 @@
           "type": "string",
           "const": "deny-library-snapshot",
           "markdownDescription": "Denies the library_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the library_stop_retained_audio command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-library-stop-retained-audio",
+          "markdownDescription": "Denies the library_stop_retained_audio command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_vocabulary_add command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-vocabulary-add",
+          "markdownDescription": "Denies the local_vocabulary_add command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_vocabulary_delete command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-vocabulary-delete",
+          "markdownDescription": "Denies the local_vocabulary_delete command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_vocabulary_edit command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-vocabulary-edit",
+          "markdownDescription": "Denies the local_vocabulary_edit command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_vocabulary_list command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-vocabulary-list",
+          "markdownDescription": "Denies the local_vocabulary_list command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_vocabulary_set_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-vocabulary-set-enabled",
+          "markdownDescription": "Denies the local_vocabulary_set_enabled command without any pre-configured scope."
         },
         {
           "description": "Denies the note_model_settings command without any pre-configured scope.",
@@ -811,6 +937,24 @@
           "type": "string",
           "const": "deny-transcript-model-settings",
           "markdownDescription": "Denies the transcript_model_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the transcript_retry_decide command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-transcript-retry-decide",
+          "markdownDescription": "Denies the transcript_retry_decide command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the transcript_retry_pending command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-transcript-retry-pending",
+          "markdownDescription": "Denies the transcript_retry_pending command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the transcript_retry_start command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-transcript-retry-start",
+          "markdownDescription": "Denies the transcript_retry_start command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

@@ -2,8 +2,7 @@
 //!
 //! `restore_withheld_turn` was registered on 2026-08-04 by the operator's
 //! correction-surface (J4) decision, with `DesktopProductCoordinator` as the
-//! storage-backed owner. It remains out of `tauri::generate_handler!` today:
-//! no rendered control invokes it yet.
+//! storage-backed owner.
 //!
 //! `regenerate_note` is registered in `tauri::generate_handler!` and, as of
 //! the generation invocation chain landing (docs/note-runtime-decision.md,
@@ -17,11 +16,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use local_meeting_notes_session_core::meeting::MeetingLifecycle;
+use local_meeting_notes_session_core::meeting::{ArtifactRef, MeetingLifecycle};
 use local_meeting_notes_session_core::operations::{
-    ProductOperationKind, RegenerateNoteUiArgs, RestoreWithheldTurnUiArgs, UiOperationAccepted,
-    UiOperationSchema, UiOperationState,
+    ProductOperationKind, RegenerateNoteUiArgs, RestoreWithheldTurnUiArgs, TranscriptRetryUiArgs,
+    UiOperationAccepted, UiOperationSchema, UiOperationState,
 };
+use local_meeting_notes_session_core::transcript_retry::TranscriptRetryOutcome;
 use tauri::State;
 use uuid::Uuid;
 
@@ -43,6 +43,23 @@ pub(crate) enum CoordinatorError {
     Refused,
 }
 
+/// References that have passed the authority's durable source/candidate
+/// checks. The presentation layer still reads each artifact again before it
+/// projects any text for the webview.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptRetryOperation {
+    pub(crate) operation_id: Uuid,
+    pub(crate) meeting_id: Uuid,
+    pub(crate) source_transcript_sha256: String,
+    pub(crate) candidate_transcript: ArtifactRef,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TranscriptRetryDecision {
+    KeepCurrent,
+    UseRetry,
+}
+
 /// The future storage/worker owner. It must re-check the current source while
 /// preparing its durable operation receipt; this facade deliberately owns none
 /// of that persistence or worker protocol.
@@ -52,6 +69,28 @@ pub(crate) trait ProductOperationCoordinator: Send + Sync {
     fn accept_restore(&self, args: &RestoreWithheldTurnUiArgs) -> Result<Uuid, CoordinatorError>;
 
     fn accept_regeneration(&self, args: &RegenerateNoteUiArgs) -> Result<Uuid, CoordinatorError>;
+
+    fn start_transcript_retry(
+        &self,
+        _: &TranscriptRetryUiArgs,
+    ) -> Result<TranscriptRetryOperation, CoordinatorError> {
+        Err(CoordinatorError::Unavailable)
+    }
+
+    fn pending_transcript_retry(
+        &self,
+        _: &TranscriptRetryUiArgs,
+    ) -> Result<Option<TranscriptRetryOperation>, CoordinatorError> {
+        Err(CoordinatorError::Unavailable)
+    }
+
+    fn decide_transcript_retry(
+        &self,
+        _: &TranscriptRetryOperation,
+        _: TranscriptRetryDecision,
+    ) -> Result<TranscriptRetryOutcome, CoordinatorError> {
+        Err(CoordinatorError::Unavailable)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +101,7 @@ pub(crate) enum ProductOperationFacadeError {
 }
 
 impl ProductOperationFacadeError {
-    fn safe_copy(self) -> &'static str {
+    pub(crate) fn safe_copy(self) -> &'static str {
         match self {
             Self::SourceChanged => SOURCE_CHANGED_COPY,
             Self::OperationUnavailable => OPERATION_UNAVAILABLE_COPY,
@@ -118,14 +157,107 @@ impl ProductOperationFacade {
             ProductOperationKind::GenerateNote,
             UiOperationState::Summarizing,
             |source| {
-                !source.has_current_note
-                    && matches!(
-                        source.lifecycle,
-                        MeetingLifecycle::TranscriptReady | MeetingLifecycle::SummaryFailed
-                    )
+                matches!(
+                    (source.lifecycle, source.has_current_note),
+                    (MeetingLifecycle::Ready, true)
+                        | (
+                            MeetingLifecycle::TranscriptReady | MeetingLifecycle::SummaryFailed,
+                            false
+                        )
+                )
             },
             || self.coordinator.accept_regeneration(&args),
         )
+    }
+
+    pub(crate) fn start_transcript_retry(
+        &self,
+        args: TranscriptRetryUiArgs,
+    ) -> Result<TranscriptRetryOperation, ProductOperationFacadeError> {
+        args.validate()
+            .map_err(|_| ProductOperationFacadeError::SourceChanged)?;
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| ProductOperationFacadeError::OperationUnavailable)?;
+        if active.is_some() {
+            return Err(ProductOperationFacadeError::OperationAlreadyActive);
+        }
+        let source = self
+            .coordinator
+            .source_for(args.meeting_id)
+            .map_err(|_| ProductOperationFacadeError::OperationUnavailable)?;
+        if source.meeting_id != args.meeting_id
+            || source.current_transcript_sha256 != args.source_transcript_sha256
+            || !matches!(
+                source.lifecycle,
+                MeetingLifecycle::TranscriptReady
+                    | MeetingLifecycle::SummaryFailed
+                    | MeetingLifecycle::Ready
+            )
+        {
+            return Err(ProductOperationFacadeError::SourceChanged);
+        }
+        let operation = self
+            .coordinator
+            .start_transcript_retry(&args)
+            .map_err(|_| ProductOperationFacadeError::OperationUnavailable)?;
+        if operation.meeting_id != args.meeting_id
+            || operation.source_transcript_sha256 != args.source_transcript_sha256
+        {
+            return Err(ProductOperationFacadeError::OperationUnavailable);
+        }
+        let accepted = UiOperationAccepted {
+            schema: UiOperationSchema::V1,
+            operation_id: operation.operation_id,
+            meeting_id: args.meeting_id,
+            kind: ProductOperationKind::TranscriptRetry,
+            state: UiOperationState::Transcribing,
+        };
+        accepted
+            .validate()
+            .map_err(|_| ProductOperationFacadeError::OperationUnavailable)?;
+        *active = Some(accepted);
+        Ok(operation)
+    }
+
+    pub(crate) fn pending_transcript_retry(
+        &self,
+        args: TranscriptRetryUiArgs,
+    ) -> Result<Option<TranscriptRetryOperation>, ProductOperationFacadeError> {
+        args.validate()
+            .map_err(|_| ProductOperationFacadeError::SourceChanged)?;
+        let source = self
+            .coordinator
+            .source_for(args.meeting_id)
+            .map_err(|_| ProductOperationFacadeError::OperationUnavailable)?;
+        if source.meeting_id != args.meeting_id
+            || source.current_transcript_sha256 != args.source_transcript_sha256
+        {
+            return Err(ProductOperationFacadeError::SourceChanged);
+        }
+        self.coordinator
+            .pending_transcript_retry(&args)
+            .map_err(|_| ProductOperationFacadeError::OperationUnavailable)
+    }
+
+    pub(crate) fn decide_transcript_retry(
+        &self,
+        operation: TranscriptRetryOperation,
+        decision: TranscriptRetryDecision,
+    ) -> Result<TranscriptRetryOutcome, ProductOperationFacadeError> {
+        let source = self
+            .coordinator
+            .source_for(operation.meeting_id)
+            .map_err(|_| ProductOperationFacadeError::OperationUnavailable)?;
+        if source.meeting_id != operation.meeting_id
+            || source.current_transcript_sha256 != operation.source_transcript_sha256
+        {
+            return Err(ProductOperationFacadeError::SourceChanged);
+        }
+        self.coordinator
+            .decide_transcript_retry(&operation, decision)
+            .map_err(|_| ProductOperationFacadeError::OperationUnavailable)
     }
 
     fn accept(
@@ -204,6 +336,15 @@ pub(crate) fn restore_withheld_turn(
     if crate::sitting_task_active(&app) {
         return Err("Finish the setup recording first.".into());
     }
+    let capture = app
+        .model
+        .lock()
+        .map_err(|_| "Finish the current recording first.".to_owned())?
+        .reducer
+        .capture();
+    if capture != local_meeting_notes_session_core::reducer::CaptureState::Idle {
+        return Err("Finish the current recording first.".into());
+    }
     let accepted = facade
         .restore_withheld_turn(RestoreWithheldTurnUiArgs {
             meeting_id,
@@ -241,6 +382,16 @@ pub(crate) fn regenerate_note(
     let accepted = facade
         .regenerate_note(RegenerateNoteUiArgs {
             meeting_id,
+            speaker_label_overrides: crate::speaker_label_overrides_for(
+                meeting_id,
+                &source_transcript_sha256,
+                &app,
+            )?,
+            vocabulary_replacements: crate::vocabulary_replacements_for(
+                meeting_id,
+                &source_transcript_sha256,
+                &app,
+            )?,
             source_transcript_sha256,
         })
         .map_err(ProductOperationFacadeError::safe_copy)
@@ -369,10 +520,30 @@ mod tests {
         ));
         let note_facade = ProductOperationFacade::new(note_coordinator.clone());
         assert_eq!(
-            note_facade.regenerate_note(note_args).unwrap(),
+            note_facade.regenerate_note(note_args.clone()).unwrap(),
             note_expected
         );
         assert_eq!(*note_coordinator.regeneration_calls.lock().unwrap(), 1);
+
+        let replacement_coordinator = Arc::new(FakeCoordinator::accepting(
+            source_for(
+                note_args.meeting_id,
+                note_args.source_transcript_sha256.clone(),
+                MeetingLifecycle::Ready,
+                true,
+            ),
+            Uuid::nil(),
+            note_expected.operation_id,
+        ));
+        let replacement_facade = ProductOperationFacade::new(replacement_coordinator.clone());
+        assert_eq!(
+            replacement_facade.regenerate_note(note_args).unwrap(),
+            note_expected
+        );
+        assert_eq!(
+            *replacement_coordinator.regeneration_calls.lock().unwrap(),
+            1
+        );
     }
 
     #[test]

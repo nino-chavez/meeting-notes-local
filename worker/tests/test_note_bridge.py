@@ -20,7 +20,7 @@ import zipfile
 from pathlib import Path
 
 from worker.note_validator import ArtifactFailure, GenerationRefused
-from worker.note_validator import locate_kept_candidates, validate_locators
+from worker.note_validator import _decode_synthesis, locate_kept_candidates, validate_locators
 from worker.note_validator import TRANSPORT_NUM_CTX
 from worker.note_validator import forbidden_in_claim, validate_claim_rows
 from worker.note_validator import inspect as inspect_snapshot
@@ -889,12 +889,31 @@ def batches():
         if not line:
             return
         request = json.loads(line)
+        if request.get("schema") == "note-synthesis-request/1":
+            aliases = [
+                json.loads(source_line)["id"]
+                for source_line in request["user"].splitlines()[1:]
+                if source_line.strip()
+            ]
+            proposal = {
+                "overview": [
+                    {
+                        "text": f"Summary grounded in selected excerpt {alias}.",
+                        "evidence_ids": [alias],
+                    }
+                    for alias in aliases[:4]
+                ],
+                "items": [],
+            }
+            answer({"content": json.dumps(proposal)})
+            continue
         enum = request["response_format"]["properties"]["items"]["items"]
         yield request, list(enum["properties"]["candidate_id"]["enum"])
 
 
 def answer(rows):
-    sys.stdout.write(json.dumps({"items": rows}) + chr(10))
+    envelope = {"items": rows} if isinstance(rows, list) else rows
+    sys.stdout.write(json.dumps(envelope) + chr(10))
     sys.stdout.flush()
 
 
@@ -1016,6 +1035,27 @@ for request, ids in batches():
     answer(verdicts(ids, lambda index: "ABSTAIN"))
 """
 
+STUB_REQUIRES_CORRECTED_LABEL = STUB_PREAMBLE + """
+for index, (request, ids) in enumerate(batches()):
+    if '"speaker":"Alex"' not in request["user"] or '"speaker":"Them"' in request["user"]:
+        Path(MARKER).write_text("wrong-label")
+    else:
+        Path(MARKER).write_text("corrected-label")
+    answer(verdicts(ids, lambda position: "KEEP" if index % 20 == 0 else "ABSTAIN"))
+"""
+
+STUB_REQUIRES_CORRECTED_VOCABULARY = STUB_PREAMBLE + """
+for index, (request, ids) in enumerate(batches()):
+    if index == 0:
+        packet = json.loads(request["user"].split("\\n\\n", 1)[1])[0]
+        anchor = next(row["text"] for row in packet["fragments"] if row["anchor"])
+        if 'packaging option' not in anchor or 'packagging option' in anchor:
+            Path(MARKER).write_text("wrong-vocabulary")
+        else:
+            Path(MARKER).write_text("corrected-vocabulary")
+    answer(verdicts(ids, lambda position: "KEEP" if index % 20 == 0 else "ABSTAIN"))
+"""
+
 
 MODEL_FILES = {"config.json": b"{}\n", "weights.npz": b"weights\n"}
 
@@ -1055,16 +1095,24 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.candidates = self._write_long_transcript(self.TRANSCRIPT_TURNS)
         self.assertGreater(self.candidates, 64, "fixture must span batches and the keep budget")
 
-    def _write_long_transcript(self, turns: int) -> int:
+    def _write_long_transcript(
+        self,
+        turns: int,
+        *,
+        speaker: str | None = None,
+        vocabulary_typo: bool = False,
+    ) -> int:
         """Replace the meeting's transcript with one that spans several batches."""
         sys.path.insert(0, str(REPO / "notes"))
+        sys.path.insert(0, str(REPO / "spike"))
         from summarize import build_fragment_map
         from transcript import load_bytes
+        from capture_health import build as build_capture_health
 
         document = {
-            "schema": "file-transcript/1",
+            "schema": "capture-transcript/1" if speaker else "file-transcript/1",
             "source": "synthetic generate-path control; not product evidence",
-            "attribution": "none",
+            "attribution": "channel" if speaker else "none",
             "turns": [
                 {
                     # Multi-byte, and early enough in the turn that a locator
@@ -1075,13 +1123,28 @@ class NoteGenerateBridgeTests(unittest.TestCase):
                     # an emoji.
                     "text": (
                         f"Turn {index:02d}: café \U0001f642 — we agreed to review "
-                        "the packaging option."
+                        f"the {'packagging' if vocabulary_typo else 'packaging'} option."
                     ),
                     "start": float(index + 1),
+                    **({"speaker": speaker} if speaker else {}),
                 }
                 for index in range(turns)
             ],
         }
+        if speaker:
+            document.update({
+                "bleed": None,
+                "voiceprint": None,
+                "capture_health": build_capture_health(
+                    mic_samples=16_000,
+                    system_samples=16_000,
+                    capture_elapsed_samples=16_000,
+                    dropouts={"mic": [], "system": []},
+                    tap_errors=[],
+                    transcription_requested=True,
+                    transcript_written=True,
+                ),
+            })
         # The coverage this fixture buys is invisible if it ever goes ASCII, so
         # it is asserted rather than trusted. Measured: with ASCII-only turns,
         # rewriting `validate_locators` to byte offsets left all 51 tests
@@ -1166,13 +1229,18 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self._harness._write_manifest(document)
 
     def _generate_command(self, **overrides) -> tuple[str, bytes]:
+        speaker_label_overrides = overrides.pop("speaker_label_overrides", None)
+        vocabulary_replacements = overrides.pop("vocabulary_replacements", None)
         request_id = str(uuid.uuid4())
         arguments = {
             "meeting_id": self.meeting_id,
             "transcript_id": self.transcript_id,
-            "model_directory": self.MODEL_DIRECTORY,
-            "deadline_s": 20,
         }
+        if speaker_label_overrides is not None:
+            arguments["speaker_label_overrides"] = speaker_label_overrides
+        if vocabulary_replacements is not None:
+            arguments["vocabulary_replacements"] = vocabulary_replacements
+        arguments.update({"model_directory": self.MODEL_DIRECTORY, "deadline_s": 20})
         arguments.update(overrides)
         command = {
             "schema": "note-bridge-command/1",
@@ -1245,7 +1313,7 @@ class NoteGenerateBridgeTests(unittest.TestCase):
             turn for turn in json.loads(raw).get("turns", []) if isinstance(turn, dict)
         ]
 
-    def test_generate_manifest_reaches_ready_and_returns_validated_points(self) -> None:
+    def test_generate_manifest_reaches_ready_and_returns_validated_note(self) -> None:
         before = self._tree()
         request_id, command = self._generate_command()
         bridge = self._start()
@@ -1275,41 +1343,127 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         product, research = self._manifest_digests()
         self.assertEqual(result["generation"]["manifest_sha256"], product)
         self.assertNotEqual(result["generation"]["manifest_sha256"], research)
-        points = result["generation"]["points"]
+        claims = result["generation"]["claims"]
         # One keep every twentieth of seventy single-candidate requests (the
         # strided offer holds the request count at seventy), kept anchors at
         # least twenty turns apart, so the pruner collapses nothing: four
         # points. A session that only served its first request would report one.
-        self.assertEqual(len(points), 4)
-        for ordinal, point in enumerate(points):
-            self.assertEqual(point["point_ordinal"], ordinal)
-            self.assertTrue(point["candidate_id"].startswith("cf-"))
-            self.assertEqual(point["evidence_state"], "located")
+        self.assertEqual(len(claims), 4)
+        for ordinal, claim in enumerate(claims):
+            self.assertEqual(claim["claim_ordinal"], ordinal)
+            self.assertEqual(claim["claim_type"], "summary")
+            self.assertTrue(claim["candidate_ids"][0].startswith("cf-"))
+            self.assertEqual(claim["evidence_state"], "located")
             # One locator: the candidate's anchor. Not the classification
             # window, which is context the model saw and the point does not
             # cite — and which a wider view would grow past note/2's cap.
-            self.assertEqual(len(point["locators"]), 1)
-            # Locators are transcript spans, and the frame carries no prose.
-            self.assertNotIn("claim", point)
+            self.assertEqual(len(claim["locators"]), 1)
+            self.assertIn("Summary grounded in selected excerpt", claim["claim"])
         # Transcript order, which is what `point_ordinal` claims to number.
         # `point_ordinal` alone is just `enumerate` and witnesses nothing.
-        turns = [point["locators"][0]["turn"] for point in points]
+        turns = [claim["locators"][0]["turn"] for claim in claims]
         self.assertEqual(turns, sorted(turns))
         self.assertEqual(len(set(turns)), len(turns))
         receipt = result["generation"]["receipt"]
-        # One response per OFFERED candidate: batch size 1 over the strided offer.
+        # One response per offered candidate, then one synthesis response.
         self.assertEqual(
-            receipt["responses"], -(-self.candidates // OFFER_STRIDE))
+            receipt["responses"], -(-self.candidates // OFFER_STRIDE) + 1)
         self.assertGreater(receipt["response_bytes"], 0)
         # Nothing under the private root moved: no note, no markdown, no receipt.
         self.assertEqual(self._tree(), before)
         self.assertTrue(self.marker.exists())
 
+    def test_generate_applies_the_bounded_overlay_without_changing_locator_source(self) -> None:
+        self._write_long_transcript(self.TRANSCRIPT_TURNS, speaker="Them")
+        self._write_generator(STUB_REQUIRES_CORRECTED_LABEL)
+        self._write_generate_manifest()
+
+        result, returncode, error, _ = self._run(
+            speaker_label_overrides=[
+                {"source_speaker": "Them", "replacement": "Alex"}
+            ]
+        )
+
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "generated")
+        self.assertEqual(self.marker.read_text(), "corrected-label")
+        self.assertEqual(result["generation"]["transcript_sha256"], self.transcript_id)
+        turns = self._transcript_turns()
+        for claim in result["generation"]["claims"]:
+            for locator in claim["locators"]:
+                text = turns[locator["turn"]]["text"][locator["start"]:locator["end"]]
+                self.assertEqual(
+                    hashlib.sha256(text.encode()).hexdigest(), locator["text_sha256"]
+                )
+
+    def test_changed_length_vocabulary_overlay_preserves_original_locator_offsets(self) -> None:
+        self._write_long_transcript(self.TRANSCRIPT_TURNS, vocabulary_typo=True)
+        self._write_generator(STUB_REQUIRES_CORRECTED_VOCABULARY)
+        self._write_generate_manifest()
+        original = self._transcript_turns()[0]["text"]
+        start = original.index("packagging")
+        end = start + len("packagging")
+        result, returncode, error, _ = self._run(
+            vocabulary_replacements=[{
+                "turn": 0,
+                "char_start": start,
+                "char_end": end,
+                "source_sha256": hashlib.sha256(
+                    original[start:end].encode("utf-8")
+                ).hexdigest(),
+                # One character shorter than the retained source phrase.
+                "replacement": "packaging",
+            }]
+        )
+
+        self.assertEqual((returncode, error), (0, b""))
+        self.assertEqual(result["outcome"], "generated")
+        self.assertEqual(self.marker.read_text(), "corrected-vocabulary")
+        turns = self._transcript_turns()
+        self.assertIn("packagging", turns[0]["text"])
+        for claim in result["generation"]["claims"]:
+            for locator in claim["locators"]:
+                text = turns[locator["turn"]]["text"][locator["start"]:locator["end"]]
+                self.assertEqual(
+                    hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                    locator["text_sha256"],
+                )
+
+    def test_stale_out_of_range_and_oversized_vocabulary_overlays_refuse_before_model_launch(self) -> None:
+        original = self._transcript_turns()[0]["text"]
+        start = original.index("packaging")
+        end = start + len("packaging")
+        valid = {
+            "turn": 0,
+            "char_start": start,
+            "char_end": end,
+            "source_sha256": hashlib.sha256(original[start:end].encode("utf-8")).hexdigest(),
+            "replacement": "package",
+        }
+        cases = {
+            "stale": [{**valid, "source_sha256": "0" * 64}],
+            "out-of-range": [{**valid, "turn": self.TRANSCRIPT_TURNS}],
+            "oversized": [valid] * 65,
+        }
+        for label, replacements in cases.items():
+            self.marker.unlink(missing_ok=True)
+            result, returncode, error, _ = self._run(
+                vocabulary_replacements=replacements
+            )
+            with self.subTest(label=label):
+                self.assertEqual((returncode, error), (0, b""))
+                self.assertEqual(result["outcome"], "transcript-only")
+                self.assertFalse(self.marker.exists())
+                self.assertEqual(
+                    result["failure"]["code"],
+                    "vocabulary-overlay" if label != "oversized" else "invalid-request",
+                )
+
     def test_generated_locators_resolve_to_the_transcripts_own_bytes(self) -> None:
         result, _, _, _ = self._run()
         turns = self._transcript_turns()
-        for point in result["generation"]["points"]:
-            for locator in point["locators"]:
+        for claim in result["generation"]["claims"]:
+            for locator in claim["locators"]:
                 text = turns[locator["turn"]]["text"][locator["start"]:locator["end"]]
                 self.assertEqual(
                     hashlib.sha256(text.encode()).hexdigest(), locator["text_sha256"]
@@ -1398,17 +1552,19 @@ class NoteGenerateBridgeTests(unittest.TestCase):
         self.assertIsNone(result["failure"])
         offered = self._offered_rows()
         self.assertGreater(len(offered), 64)
-        self.assertEqual(result["generation"]["receipt"]["responses"], len(offered))
+        self.assertEqual(result["generation"]["receipt"]["responses"], len(offered) + 1)
         import candidate_first
         pruned = candidate_first.prune_keeps(
             offered,
             [{"candidate_id": row["candidate_id"], "verdict": "KEEP"}
              for row in offered])
-        self.assertEqual(
-            [point["candidate_id"] for point in result["generation"]["points"]],
-            pruned["pruned_candidate_ids"])
-        self.assertLessEqual(len(result["generation"]["points"]), 64)
-        self.assertGreater(len(result["generation"]["points"]), 0)
+        cited = [
+            claim["candidate_ids"][0]
+            for claim in result["generation"]["claims"]
+        ]
+        self.assertEqual(cited, pruned["pruned_candidate_ids"][:4])
+        self.assertLessEqual(len(pruned["pruned_candidate_ids"]), 64)
+        self.assertGreater(len(pruned["pruned_candidate_ids"]), 0)
 
     def test_more_pruned_points_than_the_keep_budget_are_refused_not_trimmed(self) -> None:
         """Keeps isolated past every fitting gap still force a refusal."""
@@ -1886,6 +2042,83 @@ class NoteGenerateBridgeTests(unittest.TestCase):
 
 
 
+class NoteSynthesisValidationTests(unittest.TestCase):
+    def test_synthesis_keeps_useful_rows_and_resolves_at_most_three_sources(self) -> None:
+        sources = [
+            {"alias": f"E{index:02d}", "candidate_id": f"candidate-{index}", "text": f"source {index}"}
+            for index in range(1, 6)
+        ]
+        points = [
+            {
+                "candidate_id": source["candidate_id"],
+                "locators": [{
+                    "turn": index,
+                    "start": 0,
+                    "end": 8,
+                    "text_sha256": f"{index:064x}",
+                }],
+            }
+            for index, source in enumerate(sources)
+        ]
+        content = """```json
+{"overview":[{"text":"The meeting covered the website plan.","evidence_ids":["E01","unknown","E02","E03","E04"]}],"items":[{"type":"proposal","text":"Explore a partner page.","evidence_ids":["E04"]},{"type":"decision","text":"The team is good to go.","evidence_ids":["E05"]}]}
+```"""
+        claims = _decode_synthesis(
+            json.dumps({"content": content}), sources, points
+        )
+        self.assertEqual([row["claim_type"] for row in claims], ["summary", "proposal"])
+        self.assertEqual(
+            claims[0]["candidate_ids"],
+            ["candidate-1", "candidate-2", "candidate-3"],
+        )
+        self.assertEqual(len(claims[0]["locators"]), 3)
+
+    def test_synthesis_refuses_when_no_evidence_linked_overview_survives(self) -> None:
+        with self.assertRaises(GenerationRefused) as raised:
+            _decode_synthesis(
+                json.dumps({"content": '{"overview":[],"items":[]}'}),
+                [],
+                [],
+            )
+        self.assertEqual(raised.exception.code, "no-model-summary")
+
+    def test_synthesis_drops_decisions_and_actions_without_explicit_evidence(self) -> None:
+        sources = [{
+            "alias": "E01",
+            "candidate_id": "candidate-1",
+            "text": "We could explore a partner page and maybe update the roster.",
+        }]
+        points = [{
+            "candidate_id": "candidate-1",
+            "locators": [{
+                "turn": 0,
+                "start": 0,
+                "end": 61,
+                "text_sha256": "0" * 64,
+            }],
+        }]
+        content = json.dumps({
+            "overview": [{
+                "text": "The meeting explored possible website changes.",
+                "evidence_ids": ["E01"],
+            }],
+            "items": [
+                {
+                    "type": "decision",
+                    "text": "The team decided to add a partner page.",
+                    "evidence_ids": ["E01"],
+                },
+                {
+                    "type": "action",
+                    "text": "The team will update the roster.",
+                    "evidence_ids": ["E01"],
+                },
+            ],
+        })
+        claims = _decode_synthesis(json.dumps({"content": content}), sources, points)
+        self.assertEqual([row["claim_type"] for row in claims], ["summary"])
+
+
 class NoteGeneratorChildTests(unittest.TestCase):
     """`worker/note_generator_mlx.py`, everywhere it can be checked without MLX.
 
@@ -2056,6 +2289,9 @@ class NoteGeneratorChildTests(unittest.TestCase):
             def decide(self, system, user, locators):
                 return [verdict] * len(locators)
 
+            def synthesize(self, system, user, max_tokens):
+                return json.dumps({"overview": [], "items": []})
+
         return _Stub
 
     def _drive(self, requests: list[dict], session=None) -> tuple[int, list[str]]:
@@ -2116,6 +2352,23 @@ class NoteGeneratorChildTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(list(json.loads(lines[0])), ["error"])
         self.assertEqual(session.resolved, [])
+
+    def test_the_session_returns_synthesis_as_one_transport_line(self) -> None:
+        request = {
+            "schema": "note-synthesis-request/1",
+            "system": "summarize",
+            "user": "selected excerpts",
+            "temperature": 0,
+            "num_predict": 1800,
+            "model_directory": "/",
+        }
+        code, lines = self._drive([request])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(
+            json.loads(json.loads(lines[0])["content"]),
+            {"overview": [], "items": []},
+        )
 
 
 class FrameSerializationContractTests(unittest.TestCase):

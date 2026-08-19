@@ -24,9 +24,10 @@ own.
 
 ## Scope and stop conditions
 
-Yawn's distributable lane is `internal-alpha`. It is a transcript and manual
-notes build, not an automatic-note release. Do not change its runtime admission
-to `product` as a packaging shortcut.
+Yawn's distributable lane is `internal-alpha`. It includes the reviewable local
+meeting note, but that generated note remains a draft with source links and an
+explicit incomplete-output fallback. Do not change its runtime admission to
+`product` as a packaging shortcut.
 
 Stop and report the blocker instead of improvising when any of these is true:
 
@@ -156,14 +157,14 @@ not download the full image merely to test the link.
 
 ## Update and deploy the landing page
 
-The site source is `/Users/nino/Workspace/dev/apps/yawn-site`. Its
+The site source is `/Users/nino/Workspace/dev/sites/ventures/yawn-site`. Its
 `index.html` owns the version, download URL, and SHA-256 shown to users. Update
 all three together only after the new R2 object is public.
 
 Commit the site source, then deploy it manually:
 
 ```sh
-cd /Users/nino/Workspace/dev/apps/yawn-site
+cd /Users/nino/Workspace/dev/sites/ventures/yawn-site
 npx wrangler pages deploy . --project-name=yawn-site --branch=main
 ```
 

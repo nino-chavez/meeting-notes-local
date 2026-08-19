@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import tempfile
 import unicodedata
@@ -21,6 +22,34 @@ MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 # server-backed one) must still be told a number wide enough for the ±2 window
 # at batch size 1. A generator that ignores it is behaving correctly.
 TRANSPORT_NUM_CTX = 32768
+SYNTHESIS_NUM_PREDICT = 1800
+SYNTHESIS_MAX_OVERVIEW = 4
+SYNTHESIS_MAX_ITEMS = 12
+SYNTHESIS_MAX_CLAIM_CHARS = 280
+
+SYNTHESIS_SYSTEM = """You write a useful meeting note from selected transcript excerpts.
+
+Return only one compact JSON object with exactly these keys in this order:
+{"overview":[...],"items":[...]}
+
+overview is an array of 2 to 4 plain sentences explaining the main subjects and context. It must be descriptive only: never say something was agreed, decided, committed, prioritized, or will happen. Each overview entry has exactly {"text":"...","evidence_ids":["..."]}. Use 1 to 3 evidence_ids from the supplied excerpts.
+
+items is an array. Each item has exactly {"type":"decision|action|proposal|question","text":"...","evidence_ids":["..."]}. Use 1 to 3 evidence_ids from the supplied excerpts.
+
+Rules:
+- Decisions are only things explicitly settled or agreed. A suggestion, possibility, preference, or idea is a proposal, never a decision.
+- Actions are only explicit commitments to do something. Discussion of possible work is a proposal, never an action.
+- Questions are unresolved questions, not rhetorical questions.
+- Keep proposals separate so ideas do not become commitments.
+- Ignore greetings, recording setup, audio checks, "we're good to go", and other meeting logistics unless the meeting was specifically about them.
+- Do not turn general discussion into an outcome.
+- Every text must be supported by all and only its evidence_ids.
+- Use the supplied ID strings exactly. Never invent an ID.
+- Do not copy long transcript passages. Write concise note language.
+- Do not identify a speaker unless the excerpt itself names the person.
+- Prefer a short useful note over filling every category. Include every clear action or decision that is actually present.
+- Omit empty categories. Do not add preamble, markdown, or a code fence.
+"""
 
 
 class ArtifactFailure(ValueError):
@@ -332,7 +361,9 @@ def validate_claim_rows(cited: list, transcript) -> list[dict]:
             not isinstance(claim, str)
             or not claim
             or any(forbidden_in_claim(character) for character in claim)
-            or claim_type not in {"decision", "action", "proposal", "question", "point"}
+            or claim_type not in {
+                "summary", "decision", "action", "proposal", "question", "point"
+            }
             or row.get("claim_sha256") != hashlib.sha256(claim.encode("utf-8")).hexdigest()
         ):
             raise ArtifactFailure("artifact-invalid", False)
@@ -419,7 +450,54 @@ def _response_refusal(raw: str) -> str:
     return "response-contract"
 
 
-def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, list[dict]]:
+def _present_classification_user(
+    user: str,
+    transcript,
+    overlay,
+) -> str:
+    """Replace only excerpt values in an already source-bound request.
+
+    Candidate IDs, cue offsets, fragment spans, and the manifest digest remain
+    those of the retained transcript. This is the source-to-presentation
+    translation boundary: model text may change length, but evidence offsets
+    never do.
+    """
+    from summarize import build_fragment_map
+
+    prefix, encoded = user.split("\n\n", 1)
+    packets = json.loads(encoded)
+    fragments = {
+        row["source_fragment_id"]: row
+        for row in build_fragment_map(transcript)["fragments"]
+    }
+    for packet in packets:
+        for row in packet["fragments"]:
+            fragment = fragments[row["source_fragment_id"]]
+            turn = fragment["turn"]
+            row["text"] = overlay.text(turn, fragment["char_start"], fragment["char_end"])
+            speaker = overlay.speaker(turn)
+            if transcript.attribution != "none" and speaker:
+                row["speaker"] = speaker
+            else:
+                row.pop("speaker", None)
+        cue = packet["cue"]
+        if cue is not None:
+            # Candidate-first's cue offsets are source offsets. Render the
+            # model-only value through the same mapping, without mutating the
+            # offset fields that the manifest already authenticated.
+            anchor = next(
+                item for item in packet["fragments"] if item["anchor"]
+            )
+            fragment = fragments[anchor["source_fragment_id"]]
+            cue["text"] = overlay.text(
+                fragment["turn"], cue["char_start"], cue["char_end"]
+            )
+    return prefix + "\n\n" + json.dumps(
+        packets, ensure_ascii=False, separators=(",", ":")
+    )
+
+
+def _classify_candidates(transcript, overlay, ask: Callable[[dict], str]) -> tuple[dict, list[dict]]:
     """Enumerate candidates locally, then take one verdict per offered candidate.
 
     This is the measured task, not a paraphrase of it. Deterministic local code
@@ -468,6 +546,7 @@ def _classify_candidates(transcript, ask: Callable[[dict], str]) -> tuple[dict, 
                 transcript, manifest, batch, batch_size,
                 offer_stride=registered["offer_stride"],
             )
+            user = _present_classification_user(user, transcript, overlay)
         except (StructuredOutputError, ValueError, KeyError, TypeError, IndexError) as exc:
             raise GenerationRefused("request-contract", False) from exc
         raw = ask(
@@ -568,6 +647,225 @@ def locate_kept_candidates(manifest: dict, kept: list[dict], transcript) -> list
     return points
 
 
+def _strip_json_fence(content: str) -> str:
+    """Accept the model's common fenced-JSON wrapper without trusting prose."""
+    value = content.strip()
+    if value.startswith("```"):
+        lines = value.splitlines()
+        if lines and lines[0].strip().lower() in {"```", "```json"}:
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        value = "\n".join(lines).strip()
+    return value
+
+
+def _synthesis_source_rows(manifest: dict, kept: list[dict], transcript, overlay) -> list[dict]:
+    from summarize import build_fragment_map
+
+    fragments = {
+        row["source_fragment_id"]: row
+        for row in build_fragment_map(transcript)["fragments"]
+    }
+    rows = []
+    for index, candidate in enumerate(kept, 1):
+        anchor = fragments[candidate["anchor_fragment_id"]]
+        rows.append(
+            {
+                "alias": f"E{index:02d}",
+                "candidate_id": candidate["candidate_id"],
+                "text": overlay.text(
+                    anchor["turn"], anchor["char_start"], anchor["char_end"]
+                ),
+            }
+        )
+    return rows
+
+
+def _usable_synthesis_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split()).strip()
+    if (
+        not text
+        or len(text) > SYNTHESIS_MAX_CLAIM_CHARS
+        or any(forbidden_in_claim(character) for character in text)
+    ):
+        return None
+    return text
+
+
+def _setup_only_claim(claim_type: str, text: str) -> bool:
+    if claim_type not in {"decision", "action"}:
+        return False
+    normalized = re.sub(r"[^a-z0-9 ]+", " ", text.lower())
+    normalized = " ".join(normalized.split())
+    return bool(
+        re.fullmatch(
+            r"(?:the team |the meeting |we |everyone )?(?:is |are |was |were )?good to go",
+            normalized,
+        )
+        or re.search(r"\b(?:start|stop|check|test)(?:ing|ed)? (?:the )?(?:recording|audio|microphone)\b", normalized)
+    )
+
+
+def _outcome_evidence_supports(claim_type: str, source_texts: list[str]) -> bool:
+    """Keep decisions and actions only when the cited words carry the outcome.
+
+    Summary, proposal, and question rows may synthesize a topic across excerpts.
+    A decision or action changes what the reader believes happened, so a model
+    label alone is not enough: the cited transcript must include an explicit
+    agreement or commitment signal.
+    """
+    if claim_type not in {"decision", "action"}:
+        return True
+    evidence = " ".join(source_texts).lower()
+    if claim_type == "decision":
+        return bool(re.search(
+            r"\b(?:agree(?:d)?|decid(?:e|ed)|approv(?:e|ed)|settle(?:d)?|"
+            r"locked in|go with|going with|move forward with|that's the plan)\b",
+            evidence,
+        ))
+    return bool(re.search(
+        r"\b(?:(?:i|we)\s+(?:will|'ll|am going to|are going to)|let me)\b",
+        evidence,
+    ))
+
+
+def _decode_synthesis(raw: str, sources: list[dict], points: list[dict]) -> list[dict]:
+    """Admit useful rows from untrusted model prose and resolve their evidence.
+
+    One malformed row does not erase the rest of a meeting note. Unknown IDs
+    are discarded, repeated IDs collapse, and the first three valid IDs become
+    the note/2 evidence bound. The whole proposal still refuses when no
+    evidence-linked overview survives.
+    """
+    try:
+        envelope = json.loads(raw)
+        if not isinstance(envelope, dict) or set(envelope) != {"content"}:
+            raise ValueError
+        content = envelope["content"]
+        if not isinstance(content, str):
+            raise ValueError
+        proposal = json.loads(_strip_json_fence(content))
+    except (UnicodeError, ValueError, TypeError) as exc:
+        raise GenerationRefused("response-json-syntax", False) from exc
+    if not isinstance(proposal, dict) or set(proposal) != {"overview", "items"}:
+        raise GenerationRefused("response-contract", False)
+    if not isinstance(proposal["overview"], list) or not isinstance(proposal["items"], list):
+        raise GenerationRefused("response-contract", False)
+
+    source_by_alias = {row["alias"]: row for row in sources}
+    point_by_candidate = {row["candidate_id"]: row for row in points}
+    claims: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    def admit(row: object, claim_type: str) -> None:
+        if not isinstance(row, dict):
+            return
+        expected = {"text", "evidence_ids"} if claim_type == "summary" else {
+            "type", "text", "evidence_ids"
+        }
+        if set(row) != expected:
+            return
+        text = _usable_synthesis_text(row.get("text"))
+        if text is None or _setup_only_claim(claim_type, text):
+            return
+        aliases = row.get("evidence_ids")
+        if not isinstance(aliases, list):
+            return
+        valid_aliases: list[str] = []
+        for alias in aliases:
+            if (
+                isinstance(alias, str)
+                and alias in source_by_alias
+                and alias not in valid_aliases
+            ):
+                valid_aliases.append(alias)
+            if len(valid_aliases) == 3:
+                break
+        if not valid_aliases:
+            return
+        if not _outcome_evidence_supports(
+            claim_type,
+            [source_by_alias[alias]["text"] for alias in valid_aliases],
+        ):
+            return
+        key = (claim_type, text.casefold())
+        if key in seen:
+            return
+        seen.add(key)
+        candidate_ids = [source_by_alias[alias]["candidate_id"] for alias in valid_aliases]
+        locators = []
+        locator_keys = set()
+        for candidate_id in candidate_ids:
+            for locator in point_by_candidate[candidate_id]["locators"]:
+                locator_key = (
+                    locator["turn"], locator["start"], locator["end"], locator["text_sha256"]
+                )
+                if locator_key not in locator_keys:
+                    locator_keys.add(locator_key)
+                    locators.append(locator)
+        locators.sort(key=lambda value: (
+            value["turn"], value["start"], value["end"], value["text_sha256"]
+        ))
+        claims.append(
+            {
+                "claim_ordinal": len(claims),
+                "claim_type": claim_type,
+                "claim": text,
+                "candidate_ids": candidate_ids,
+                "evidence_state": "located",
+                "locators": locators,
+            }
+        )
+
+    for row in proposal["overview"][:SYNTHESIS_MAX_OVERVIEW]:
+        admit(row, "summary")
+    overview_count = len(claims)
+    for row in proposal["items"]:
+        if len(claims) - overview_count >= SYNTHESIS_MAX_ITEMS:
+            break
+        if not isinstance(row, dict):
+            continue
+        claim_type = row.get("type")
+        if claim_type in {"decision", "action", "proposal", "question"}:
+            admit(row, claim_type)
+    if overview_count == 0:
+        raise GenerationRefused("no-model-summary", True)
+    return claims
+
+
+def synthesize_note(
+    transcript,
+    manifest: dict,
+    kept: list[dict],
+    points: list[dict],
+    overlay,
+    ask: Callable[[dict], str],
+) -> list[dict]:
+    sources = _synthesis_source_rows(manifest, kept, transcript, overlay)
+    user = "SELECTED TRANSCRIPT EXCERPTS:\n" + "\n".join(
+        json.dumps(
+            {"id": row["alias"], "text": row["text"]},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        for row in sources
+    )
+    raw = ask(
+        {
+            "schema": "note-synthesis-request/1",
+            "system": SYNTHESIS_SYSTEM,
+            "user": user,
+            "num_predict": SYNTHESIS_NUM_PREDICT,
+            "num_ctx": TRANSPORT_NUM_CTX,
+            "temperature": 0,
+        }
+    )
+    return _decode_synthesis(raw, sources, points)
+
+
 def generate(
     root_fd: int,
     arguments: dict,
@@ -575,7 +873,7 @@ def generate(
     ask: Callable[[dict], str],
     after_open: Callable[[], None] | None = None,
 ) -> dict:
-    """Select note points from one pinned transcript and locate them here.
+    """Select transcript evidence, then synthesize a usable meeting note.
 
     The transcript is opened, digest-checked, and held open exactly as the
     read-only paths do. `ask` is the injected model seam: it takes one built
@@ -586,9 +884,10 @@ def generate(
     transcript's identity is re-checked after classification, so a swap mid-run
     is caught.
 
-    What comes back is locators, not prose. Every point is an excerpt the
-    transcript already holds; no claim text is synthesized here, because a
-    prose stage is a separate measurement.
+    The first stage preserves the measured candidate-selection lane. The
+    second stage proposes overview and outcome prose against aliases for those
+    selected excerpts. Local code resolves every admitted alias back to exact
+    transcript locators before anything can be persisted.
     """
     from transcript import load_bytes
 
@@ -615,19 +914,33 @@ def generate(
             transcript = load_bytes(transcript_bytes, source=f"transcript:{transcript_id}")
         except (UnicodeError, ValueError, KeyError, TypeError, IndexError) as exc:
             raise ArtifactFailure("artifact-invalid", False) from exc
+        # Build the prompt-only view only after retained bytes have passed
+        # their digest check. It retains original source spans even when a
+        # vocabulary replacement changes text length; note artifacts and
+        # locators keep naming the immutable `transcript_id` source.
+        from transcript import PromptOverlay
+        try:
+            overlay = PromptOverlay.from_transport(
+                transcript,
+                arguments.get("speaker_label_overrides"),
+                arguments.get("vocabulary_replacements"),
+            )
+        except (KeyError, TypeError, ValueError, UnicodeError) as exc:
+            raise GenerationRefused("vocabulary-overlay", False) from exc
         if not transcript.turns:
             raise GenerationRefused("no-generatable-transcript", True)
-        manifest, kept = _classify_candidates(transcript, ask)
+        manifest, kept = _classify_candidates(transcript, overlay, ask)
         points = locate_kept_candidates(manifest, kept, transcript)
+        claims = synthesize_note(transcript, manifest, kept, points, overlay, ask)
         _require_links(directories, files)
         _require_snapshot(transcript_file, transcript_bytes, transcript_id)
         _require_links(directories, files)
         return {
-            "schema": "note-generation/1",
+            "schema": "note-generation/2",
             "transcript_sha256": transcript_id,
             "manifest_sha256": manifest["manifest_sha256"],
             "candidates": len(manifest["candidates"]),
-            "points": points,
+            "claims": claims,
         }
     finally:
         for link in files:

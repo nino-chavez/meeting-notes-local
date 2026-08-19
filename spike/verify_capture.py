@@ -13,6 +13,7 @@ from pathlib import Path
 
 from capture_health import TRANSCRIPT_SCHEMA
 from capture_health import build as build_capture_health
+from capture_health import unknown_quality, validate_microphone_identity, validate_quality_evidence
 from capture_health import validate as validate_capture_health
 from dual_capture import (
     finalize_session,
@@ -153,6 +154,19 @@ def _verify_directory(
     if session.get("reconciliation") != reconciliation:
         raise VerificationError("session reconciliation receipt does not match the files")
 
+    quality = session.get("quality")
+    if quality is not None:
+        try:
+            validate_quality_evidence(quality, mic_path=capture_dir / "mic.wav")
+        except ValueError as exc:
+            raise VerificationError(f"capture quality is invalid ({exc})") from None
+    microphone = session.get("microphone")
+    if microphone is not None:
+        try:
+            validate_microphone_identity(microphone)
+        except ValueError as exc:
+            raise VerificationError(f"microphone identity is invalid ({exc})") from None
+
     return capture_dir, session, current_artifacts
 
 
@@ -171,6 +185,10 @@ def verify_acquisition(capture_dir: Path) -> dict:
         "session_sha256": sha256(capture_dir / "session.json"),
         "mic_sha256": sha256(capture_dir / "mic.wav"),
         "system_sha256": sha256(capture_dir / "system.wav"),
+        "quality": session.get("quality") or unknown_quality(
+            "legacy receipt has no persisted quality evidence"
+        ),
+        "microphone": session.get("microphone"),
     }
 
 
@@ -216,6 +234,10 @@ def verify_capture(capture_dir: Path, *, interaction_canary: bool = False) -> di
         "attribution": transcript.get("attribution"),
         "artifact_count": len(current_artifacts) + 1,
         "interaction_canary": interaction_canary,
+        "quality": session.get("quality") or unknown_quality(
+            "legacy receipt has no persisted quality evidence"
+        ),
+        "microphone": session.get("microphone"),
     }
 
 

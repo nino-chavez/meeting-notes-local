@@ -50,6 +50,7 @@ import numpy as np
 from capture_health import MAX_CLOCK_DRIFT_PPM as HARDWARE_DRIFT_PPM
 from capture_health import RATE
 from capture_health import TRANSCRIPT_SCHEMA as CAPTURE_TRANSCRIPT_SCHEMA
+from capture_health import build_microphone_identity, build_quality_from_wav
 from capture_health import build as capture_health
 from capture_health import validate as validate_capture_health
 
@@ -425,13 +426,25 @@ class MicLeg(Leg):
         self.stream = None
         self.device = device
         self.device_name = None
+        self.device_identity = None
 
     def start(self):
-        self.device_name = sd.query_devices(
-            self.device if self.device is not None else sd.default.device[0]
-        )["name"]
+        resolved_index = self.device if self.device is not None else sd.default.device[0]
+        device_info = sd.query_devices(resolved_index)
+        self.device_name = device_info["name"]
+        self.device_identity = build_microphone_identity(
+            index=int(resolved_index),
+            name=str(device_info["name"]),
+            hostapi=(
+                int(device_info["hostapi"])
+                if device_info.get("hostapi") is not None
+                else None
+            ),
+        )
         self.stream = sd.InputStream(
-            device=self.device,
+            # Bind the exact device we resolved and persist below. Passing None
+            # here would allow a default-device change between query and open.
+            device=resolved_index,
             samplerate=RATE,
             channels=1,
             dtype="float32",
@@ -1447,6 +1460,8 @@ def write_session_manifest(
     started_at: str,
     health: dict | None = None,
     *,
+    quality: dict | None = None,
+    microphone: dict | None = None,
     no_overwrite: bool = False,
 ) -> dict:
     """Atomically mark whether one unique capture directory is usable.
@@ -1466,6 +1481,14 @@ def write_session_manifest(
     if status != "incomplete":
         usable = validate_capture_health(health)
         reconciliation = reconcile_capture_artifacts(out_dir, health)
+        if quality is not None:
+            from capture_health import validate_quality_evidence
+
+            validate_quality_evidence(quality, mic_path=out_dir / "mic.wav")
+        if microphone is not None:
+            from capture_health import validate_microphone_identity
+
+            validate_microphone_identity(microphone)
     if status == "complete" and not usable:
         raise ValueError(
             "a capture cannot be complete without passing capture-health evidence"
@@ -1493,6 +1516,8 @@ def write_session_manifest(
             if status in {"complete", "failed", "abandoned"} else None
         ),
         "health": health,
+        "quality": quality,
+        "microphone": microphone,
         "reconciliation": reconciliation,
         "artifacts": artifacts,
     }
@@ -1530,17 +1555,26 @@ def finalize_session(
     started_at: str,
     health: dict,
     *,
+    microphone: dict | None = None,
+    quality: dict | None = None,
     abandoned: bool = False,
     no_overwrite: bool = False,
 ) -> dict:
     """Choose and persist the only final status supported by the evidence."""
     usable = validate_capture_health(health)
     status = "abandoned" if abandoned else ("complete" if usable else "failed")
+    if quality is None:
+        quality = build_quality_from_wav(
+            out_dir / "mic.wav",
+            source_sha256=sha256(out_dir / "mic.wav") if (out_dir / "mic.wav").is_file() else None,
+        )
     return write_session_manifest(
         out_dir,
         status,
         started_at,
         health,
+        quality=quality,
+        microphone=microphone,
         no_overwrite=no_overwrite,
     )
 
@@ -2640,7 +2674,11 @@ def main():
         shown_at=None if abandoned.is_set() else shown_at,
     )
     manifest = finalize_session(
-        out_dir, started_at, health, abandoned=abandoned.is_set()
+        out_dir,
+        started_at,
+        health,
+        microphone=mic_leg.device_identity,
+        abandoned=abandoned.is_set(),
     )
     final_status = manifest["status"]
     print(f"  session manifest → {out_dir / 'session.json'} ({final_status})")

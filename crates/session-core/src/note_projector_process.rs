@@ -33,6 +33,9 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::local_vocabulary::{
+    VocabularyRangeReplacement, vocabulary_range_replacements_are_valid,
+};
 use crate::meeting::valid_opaque_id;
 use crate::model_store::{
     DownloadableModel, ModelCatalog, NoteModel, NoteModelFile, NoteModelFileRole,
@@ -42,6 +45,7 @@ use crate::note_projection::{
     ProjectionCancellation, StrictJson, array, exact_object, strict_json,
     string, u64_value,
 };
+use crate::operations::SpeakerLabelOverride;
 use crate::storage::StorageRoot;
 
 const MANIFEST_FD: RawFd = 100;
@@ -494,6 +498,14 @@ pub struct GenerateNoteRequest {
     pub request_id: Uuid,
     pub meeting_id: String,
     pub transcript_sha256: String,
+    /// A bounded, operation-scoped presentation overlay. It is not a
+    /// transcript derivative: locators and note provenance stay bound to the
+    /// retained transcript digest above.
+    pub speaker_label_overrides: Vec<SpeakerLabelOverride>,
+    /// Exact source-span substitutions for model-facing prompt text. The
+    /// worker re-derives every range and digest from the retained transcript;
+    /// candidate locators and note provenance never point at replacement text.
+    pub vocabulary_replacements: Vec<VocabularyRangeReplacement>,
 }
 
 /// The `note.generate` transport: the same hardened one-shot child as the
@@ -1976,10 +1988,39 @@ fn validate_request(request: &ProjectRequest) -> Result<(), InternalOutcome> {
 }
 
 fn validate_generate_request(request: &GenerateNoteRequest) -> Result<(), InternalOutcome> {
-    if !valid_opaque_id(&request.meeting_id) || !valid_digest(&request.transcript_sha256) {
+    if !valid_opaque_id(&request.meeting_id)
+        || !valid_digest(&request.transcript_sha256)
+        || !speaker_label_overrides_are_valid(&request.speaker_label_overrides)
+        || !vocabulary_range_replacements_are_valid(&request.vocabulary_replacements)
+    {
         return Err(InternalOutcome::Unavailable);
     }
     Ok(())
+}
+
+fn speaker_label_overrides_are_valid(overrides: &[SpeakerLabelOverride]) -> bool {
+    if overrides.len() > 3 {
+        return false;
+    }
+    let mut previous = None;
+    for override_ in overrides {
+        let rank = match override_.source_speaker.as_deref() {
+            None => 0,
+            Some("Me") => 1,
+            Some("Them") => 2,
+            _ => return false,
+        };
+        if previous.is_some_and(|prior| prior >= rank)
+            || override_.replacement.is_empty()
+            || override_.replacement.len() > 80
+            || override_.replacement.trim() != override_.replacement
+            || override_.replacement.chars().any(char::is_control)
+        {
+            return false;
+        }
+        previous = Some(rank);
+    }
+    true
 }
 
 fn valid_relative_path(value: &str) -> bool {
@@ -2055,6 +2096,10 @@ struct GenerateCommand<'a> {
 struct GenerateArguments<'a> {
     meeting_id: &'a str,
     transcript_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    speaker_label_overrides: Option<&'a [SpeakerLabelOverride]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vocabulary_replacements: Option<&'a [VocabularyRangeReplacement]>,
     model_directory: &'a str,
     deadline_s: u64,
 }
@@ -2070,6 +2115,10 @@ fn generate_command(
         arguments: GenerateArguments {
             meeting_id: &request.meeting_id,
             transcript_id: &request.transcript_sha256,
+            speaker_label_overrides: (!request.speaker_label_overrides.is_empty())
+                .then_some(request.speaker_label_overrides.as_slice()),
+            vocabulary_replacements: (!request.vocabulary_replacements.is_empty())
+                .then_some(request.vocabulary_replacements.as_slice()),
             model_directory,
             deadline_s: GENERATE_DEADLINE_SECONDS,
         },
@@ -2753,6 +2802,8 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
             request_id: Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap(),
             meeting_id: "meeting-a".into(),
             transcript_sha256: "c".repeat(64),
+            speaker_label_overrides: Vec::new(),
+            vocabulary_replacements: Vec::new(),
         }
     }
 
@@ -2935,6 +2986,65 @@ def main_from_fds(manifest_fd,bridge_fd,validator_fd,storage_root,expected_paren
             )
             .into_bytes()
         );
+    }
+
+    #[test]
+    fn generate_command_carries_only_a_bounded_speaker_label_overlay() {
+        let mut request = generate_request();
+        request.speaker_label_overrides = vec![SpeakerLabelOverride {
+            source_speaker: Some("Them".into()),
+            replacement: "Alex".into(),
+        }];
+
+        assert_eq!(
+            generate_command(&request, "models/note.d/m/r").unwrap(),
+            format!(
+                "{{\"schema\":\"note-bridge-command/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.generate\",\"arguments\":{{\"meeting_id\":\"meeting-a\",\"transcript_id\":\"{}\",\"speaker_label_overrides\":[{{\"source_speaker\":\"Them\",\"replacement\":\"Alex\"}}],\"model_directory\":\"models/note.d/m/r\",\"deadline_s\":3600}}}}\n",
+                "c".repeat(64)
+            )
+            .into_bytes()
+        );
+    }
+
+    #[test]
+    fn generate_command_carries_source_bound_vocabulary_replacements() {
+        let mut request = generate_request();
+        request.vocabulary_replacements = vec![VocabularyRangeReplacement {
+            turn: 2,
+            char_start: 4,
+            char_end: 10,
+            source_sha256: "d".repeat(64),
+            replacement: "Kibble".into(),
+        }];
+
+        assert_eq!(
+            generate_command(&request, "models/note.d/m/r").unwrap(),
+            format!(
+                "{{\"schema\":\"note-bridge-command/1\",\"request_id\":\"11111111-1111-4111-8111-111111111111\",\"operation\":\"note.generate\",\"arguments\":{{\"meeting_id\":\"meeting-a\",\"transcript_id\":\"{}\",\"vocabulary_replacements\":[{{\"turn\":2,\"char_start\":4,\"char_end\":10,\"source_sha256\":\"{}\",\"replacement\":\"Kibble\"}}],\"model_directory\":\"models/note.d/m/r\",\"deadline_s\":3600}}}}\n",
+                "c".repeat(64),
+                "d".repeat(64),
+            )
+            .into_bytes()
+        );
+    }
+
+    #[test]
+    fn malformed_or_oversized_vocabulary_replacements_refuse_before_launch() {
+        let fixture = generative_fixture("descriptor-binding");
+        let generator = note_generator(&fixture, 2_000, 2_000);
+        let mut malformed = generate_request();
+        malformed.vocabulary_replacements = vec![VocabularyRangeReplacement {
+            turn: 0,
+            char_start: 4,
+            char_end: 4,
+            source_sha256: "d".repeat(64),
+            replacement: "Kibble".into(),
+        }];
+        assert_eq!(
+            generator.generate(&malformed),
+            Err(ProjectTransportError::Unavailable)
+        );
+        assert!(!fixture.storage_root.join("bound-command").exists());
     }
 
     #[test]

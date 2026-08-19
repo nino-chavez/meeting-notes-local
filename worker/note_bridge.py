@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import uuid
 import zipfile
 from dataclasses import dataclass
@@ -998,6 +999,78 @@ def _opaque_meeting_id(value: object) -> str:
     return value
 
 
+def _validate_speaker_label_overrides(value: object) -> None:
+    """Admit the one bounded overlay the generate role can carry.
+
+    This is transport validation, not sidecar parsing: the desktop has already
+    derived the entries from its digest-bound correction history. The bridge
+    only ensures a hostile command cannot widen those exact source groups
+    before the validator presents them to the model.
+    """
+    if not isinstance(value, list) or len(value) > 3:
+        raise InvalidArguments("speaker label overlay has too many source groups")
+    previous = -1
+    for override in value:
+        if not isinstance(override, dict) or list(override) != ["source_speaker", "replacement"]:
+            raise InvalidArguments("speaker label overlay entry has the wrong shape")
+        rank = {None: 0, "Me": 1, "Them": 2}.get(override["source_speaker"])
+        replacement = override["replacement"]
+        if (
+            rank is None
+            or rank <= previous
+            or not isinstance(replacement, str)
+            or not replacement
+            or len(replacement.encode("utf-8")) > 80
+            or replacement != replacement.strip()
+            or any(unicodedata.category(character) == "Cc" for character in replacement)
+        ):
+            raise InvalidArguments("speaker label overlay is invalid")
+        previous = rank
+
+
+def _validate_vocabulary_replacements(value: object) -> None:
+    """Close source-span replacements before the validator imports a model.
+
+    The validator owns source-byte re-derivation after it opens the immutable
+    transcript. This bridge owns the hostile-frame boundary, so malformed or
+    oversized overlays cannot get as far as the generator process.
+    """
+    if not isinstance(value, list) or len(value) > 64:
+        raise InvalidArguments("vocabulary overlay has too many replacements")
+    previous = None
+    for replacement in value:
+        if not isinstance(replacement, dict) or list(replacement) != [
+            "turn", "char_start", "char_end", "source_sha256", "replacement"
+        ]:
+            raise InvalidArguments("vocabulary overlay entry has the wrong shape")
+        turn = replacement["turn"]
+        start = replacement["char_start"]
+        end = replacement["char_end"]
+        source_sha256 = replacement["source_sha256"]
+        text = replacement["replacement"]
+        if (
+            type(turn) is not int
+            or not 0 <= turn <= 0xFFFFFFFF
+            or type(start) is not int
+            or start < 0
+            or type(end) is not int
+            or end <= start
+            or not isinstance(text, str)
+            or not text
+            or len(text.encode("utf-8")) > 512
+            or any(unicodedata.category(character) in {"Cc", "Cs"} for character in text)
+        ):
+            raise InvalidArguments("vocabulary overlay is invalid")
+        try:
+            _safe_digest(source_sha256, "vocabulary overlay source digest")
+        except BridgeRefused as exc:
+            raise InvalidArguments(str(exc)) from exc
+        position = (turn, start, end)
+        if previous is not None and previous >= position:
+            raise InvalidArguments("vocabulary overlay replacements are not source ordered")
+        previous = position
+
+
 def _parse_command(frame: bytes, role: str) -> tuple[str, dict]:
     value = json.loads(frame, object_pairs_hook=_reject_duplicate_keys)
     if not isinstance(value, dict) or list(value) != [
@@ -1019,11 +1092,14 @@ def _parse_command(frame: bytes, role: str) -> tuple[str, dict]:
     # It names the installed model directory instead, because the manifest pins
     # model identity by digest and the caller owns where that model is
     # installed.
-    expected = (
-        ["meeting_id", "transcript_id", "model_directory", "deadline_s"]
-        if role == "generate"
-        else ["meeting_id", "note_id", "transcript_id"]
-    )
+    expected = ["meeting_id", "note_id", "transcript_id"]
+    if role == "generate":
+        expected = ["meeting_id", "transcript_id"]
+        if "speaker_label_overrides" in arguments:
+            expected.append("speaker_label_overrides")
+        if "vocabulary_replacements" in arguments:
+            expected.append("vocabulary_replacements")
+        expected.extend(("model_directory", "deadline_s"))
     if not isinstance(arguments, dict) or list(arguments) != expected:
         raise InvalidArguments("note arguments have the wrong shape")
     if role == "inspect":
@@ -1041,6 +1117,10 @@ def _parse_command(frame: bytes, role: str) -> tuple[str, dict]:
             deadline = arguments["deadline_s"]
             if type(deadline) is not int or not 1 <= deadline <= GENERATOR_DEADLINE_S:
                 raise InvalidArguments("generation deadline is outside the registered bound")
+            if "speaker_label_overrides" in arguments:
+                _validate_speaker_label_overrides(arguments["speaker_label_overrides"])
+            if "vocabulary_replacements" in arguments:
+                _validate_vocabulary_replacements(arguments["vocabulary_replacements"])
         _safe_digest(arguments["transcript_id"], "transcript ID")
     except BridgeRefused as exc:
         raise InvalidArguments(str(exc)) from exc

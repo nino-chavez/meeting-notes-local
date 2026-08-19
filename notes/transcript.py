@@ -26,8 +26,10 @@ from __future__ import annotations
 import json
 import re
 import sys
+import unicodedata
 from copy import deepcopy
 from dataclasses import dataclass, field
+import hashlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "spike"))
@@ -49,6 +51,103 @@ class Turn:
     text: str
     speaker: str | None = None
     start: float | None = None
+
+
+@dataclass(frozen=True)
+class PromptOverlay:
+    """A checked presentation-only view over retained visible transcript turns.
+
+    Source offsets stay Unicode scalar offsets into ``transcript.turns``. The
+    overlay never builds a second transcript: callers ask for one source span
+    at a time, and candidate locators continue to use the untouched source
+    transcript. Speaker labels render first; vocabulary substitutions then
+    affect only the body text. That composition order is intentional and
+    deterministic because vocabulary entries cannot rewrite a label.
+    """
+
+    transcript: "Transcript"
+    speaker_labels: dict[str | None, str]
+    replacements: dict[int, tuple[dict, ...]]
+
+    @classmethod
+    def from_transport(
+        cls,
+        transcript: "Transcript",
+        speaker_label_overrides: list[dict] | None = None,
+        vocabulary_replacements: list[dict] | None = None,
+    ) -> "PromptOverlay":
+        labels = {
+            item["source_speaker"]: item["replacement"]
+            for item in (speaker_label_overrides or [])
+        }
+        by_turn: dict[int, list[dict]] = {}
+        previous: tuple[int, int, int] | None = None
+        for item in vocabulary_replacements or []:
+            # Transport shape has already been closed by the bridge. These
+            # checks bind it to the source bytes before any model request.
+            if not isinstance(item, dict):
+                raise ValueError("vocabulary overlay entry is invalid")
+            turn, start, end = item.get("turn"), item.get("char_start"), item.get("char_end")
+            source_sha256, replacement = item.get("source_sha256"), item.get("replacement")
+            position = (turn, start, end)
+            if (
+                type(turn) is not int
+                or type(start) is not int
+                or type(end) is not int
+                or not isinstance(source_sha256, str)
+                or not isinstance(replacement, str)
+                or len(source_sha256) != 64
+                or any(character not in "0123456789abcdef" for character in source_sha256)
+                or not replacement
+                or len(replacement.encode("utf-8")) > 512
+                or any(unicodedata.category(character) in {"Cc", "Cs"}
+                       for character in replacement)
+                or not 0 <= turn < len(transcript.turns)
+                or not 0 <= start < end <= len(transcript.turns[turn].text)
+                or previous is not None and previous >= position
+                or (
+                    previous is not None
+                    and previous[0] == turn
+                    and start < previous[2]
+                )
+            ):
+                raise ValueError("vocabulary overlay source range is invalid")
+            source = transcript.turns[turn].text[start:end]
+            if hashlib.sha256(source.encode("utf-8")).hexdigest() != source_sha256:
+                raise ValueError("vocabulary overlay source is stale")
+            by_turn.setdefault(turn, []).append(item)
+            previous = position
+        return cls(
+            transcript=transcript,
+            speaker_labels=labels,
+            replacements={turn: tuple(items) for turn, items in by_turn.items()},
+        )
+
+    def speaker(self, turn: int) -> str | None:
+        source = self.transcript.turns[turn].speaker
+        return self.speaker_labels.get(source, source)
+
+    def text(self, turn: int, start: int, end: int) -> str:
+        """Render one original scalar span without changing its provenance.
+
+        A replacement is included only when its complete original source span
+        belongs to this model excerpt. If an excerpt cuts through a phrase,
+        that excerpt does not contain the exact phrase and remains source text.
+        """
+        source = self.transcript.turns[turn].text
+        if not 0 <= start <= end <= len(source):
+            raise ValueError("prompt span is outside the source turn")
+        cursor = start
+        output: list[str] = []
+        for item in self.replacements.get(turn, ()):
+            item_start, item_end = item["char_start"], item["char_end"]
+            if item_start < start or item_end > end:
+                continue
+            output.append(source[cursor:item_start])
+            output.append(item["replacement"])
+            cursor = item_end
+        output.append(source[cursor:end])
+        return "".join(output)
 
 
 @dataclass
@@ -165,6 +264,28 @@ class Transcript:
             else:
                 lines.append(f"{t.speaker}: {t.text}")
         return "\n".join(lines)
+
+    def with_speaker_label_overrides(self, overrides: list[dict]) -> "Transcript":
+        """Return a prompt-only view with exact speaker labels substituted.
+
+        The caller supplies the already-validated, digest-bound overlay from a
+        single regeneration request. This does not rewrite retained words,
+        timestamps, withheld rows, or transcript identity; it changes only the
+        label rendered to the note generator.
+        """
+        labels = {override["source_speaker"]: override["replacement"] for override in overrides}
+        return self._derived(
+            source=self.source,
+            attribution=self.attribution,
+            turns=[
+                Turn(
+                    text=turn.text,
+                    speaker=labels.get(turn.speaker, turn.speaker),
+                    start=turn.start,
+                )
+                for turn in self.turns
+            ],
+        )
 
     def _derived(self, *, source: str, attribution: str, turns: list[Turn]) -> Transcript:
         """Make a transformed view without discarding capture provenance.

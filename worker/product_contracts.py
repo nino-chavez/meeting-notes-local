@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 import uuid
 
 
@@ -12,6 +13,8 @@ class ProductContractRefused(ValueError):
 
 
 MAX_SOURCE_TURN_INDEX = (1 << 32) - 1
+MAX_VOCABULARY_REPLACEMENTS = 64
+MAX_VOCABULARY_REPLACEMENT_BYTES = 512
 
 
 def _exact_object(value: object, names: set[str], label: str) -> dict:
@@ -42,6 +45,80 @@ def _digest(value: object, label: str) -> str:
     return value
 
 
+def validate_speaker_label_overrides(value: object) -> list[dict]:
+    if not isinstance(value, list) or len(value) > 3:
+        raise ProductContractRefused("speaker label overlay has too many source groups")
+    previous = -1
+    for override in value:
+        override = _exact_object(
+            override, {"source_speaker", "replacement"}, "speaker label overlay entry"
+        )
+        rank = {None: 0, "Me": 1, "Them": 2}.get(override["source_speaker"])
+        if rank is None or rank <= previous:
+            raise ProductContractRefused(
+                "speaker label overlay source groups are not unique and ordered"
+            )
+        replacement = override["replacement"]
+        if (
+            not isinstance(replacement, str)
+            or not replacement
+            or len(replacement.encode("utf-8")) > 80
+            or replacement != replacement.strip()
+            or any(unicodedata.category(character) == "Cc" for character in replacement)
+        ):
+            raise ProductContractRefused("speaker label overlay replacement is invalid")
+        previous = rank
+    return value
+
+
+def validate_vocabulary_replacements(value: object) -> list[dict]:
+    """Close the prompt-only source-span vocabulary overlay.
+
+    This admits structure and boundedness only. `note_validator` re-derives
+    each scalar range and digest from the immutable transcript before a model
+    sees any replacement, which is the point at which stale source text can be
+    detected.
+    """
+    if not isinstance(value, list) or len(value) > MAX_VOCABULARY_REPLACEMENTS:
+        raise ProductContractRefused("vocabulary overlay has too many replacements")
+    previous: tuple[int, int, int] | None = None
+    for replacement in value:
+        replacement = _exact_object(
+            replacement,
+            {"turn", "char_start", "char_end", "source_sha256", "replacement"},
+            "vocabulary overlay entry",
+        )
+        turn = replacement["turn"]
+        start = replacement["char_start"]
+        end = replacement["char_end"]
+        text = replacement["replacement"]
+        if (
+            isinstance(turn, bool)
+            or not isinstance(turn, int)
+            or turn < 0
+            or turn > MAX_SOURCE_TURN_INDEX
+            or isinstance(start, bool)
+            or not isinstance(start, int)
+            or start < 0
+            or isinstance(end, bool)
+            or not isinstance(end, int)
+            or end <= start
+            or not isinstance(text, str)
+            or not text
+            or len(text.encode("utf-8")) > MAX_VOCABULARY_REPLACEMENT_BYTES
+            or any(unicodedata.category(character) in {"Cc", "Cs"} for character in text)
+        ):
+            raise ProductContractRefused("vocabulary overlay replacement is invalid")
+        _digest(replacement["source_sha256"], "vocabulary overlay source digest")
+        position = (turn, start, end)
+        if previous is not None and previous >= position:
+            raise ProductContractRefused(
+                "vocabulary overlay replacements are not source ordered"
+            )
+        previous = position
+    return value
+
+
 def validate_transcript_restore_arguments(value: object) -> dict:
     arguments = _exact_object(
         value,
@@ -61,6 +138,27 @@ def validate_transcript_restore_arguments(value: object) -> dict:
     return arguments
 
 
+def validate_transcript_retry_arguments(value: object) -> dict:
+    """Close a retry to the current transcript and retained capture bytes."""
+    arguments = _exact_object(
+        value,
+        {
+            "meeting_id",
+            "source_transcript_sha256",
+            "capture_session_sha256",
+            "microphone_audio_sha256",
+            "system_audio_sha256",
+        },
+        "transcript.retry arguments",
+    )
+    _uuid(arguments["meeting_id"], "meeting_id")
+    _digest(arguments["source_transcript_sha256"], "source_transcript_sha256")
+    _digest(arguments["capture_session_sha256"], "capture_session_sha256")
+    _digest(arguments["microphone_audio_sha256"], "microphone_audio_sha256")
+    _digest(arguments["system_audio_sha256"], "system_audio_sha256")
+    return arguments
+
+
 def validate_note_create_arguments(value: object) -> dict:
     """Admit both note.create shapes: bare, and carrying a generation payload.
 
@@ -71,19 +169,29 @@ def validate_note_create_arguments(value: object) -> dict:
     assembler's job; this contract only closes the outer shape.
     """
     names = {"meeting_id", "source_transcript_sha256"}
-    if isinstance(value, dict) and "generation" in value:
-        names = names | {"generation"}
+    if isinstance(value, dict):
+        names |= {
+            key for key in (
+                "generation", "speaker_label_overrides", "vocabulary_replacements"
+            ) if key in value
+        }
     arguments = _exact_object(value, names, "note.create arguments")
     _uuid(arguments["meeting_id"], "meeting_id")
     _digest(arguments["source_transcript_sha256"], "source_transcript_sha256")
     if "generation" in arguments:
+        raw_generation = arguments["generation"]
+        if not isinstance(raw_generation, dict):
+            raise ProductContractRefused(
+                "note.create generation payload does not match the closed schema")
+        schema = raw_generation.get("schema")
+        collection = "claims" if schema == "note-generation/2" else "points"
         generation = _exact_object(
-            arguments["generation"],
+            raw_generation,
             {"schema", "transcript_sha256", "manifest_sha256", "candidates",
-             "points", "receipt"},
+             collection, "receipt"},
             "note.create generation payload",
         )
-        if generation["schema"] != "note-generation/1":
+        if generation["schema"] not in {"note-generation/1", "note-generation/2"}:
             raise ProductContractRefused(
                 "note.create generation payload schema is unsupported")
         _digest(generation["transcript_sha256"], "generation transcript_sha256")
@@ -99,9 +207,9 @@ def validate_note_create_arguments(value: object) -> dict:
         ):
             raise ProductContractRefused(
                 "generation candidate count must be a positive integer")
-        if not isinstance(generation["points"], list) or not generation["points"]:
+        if not isinstance(generation[collection], list) or not generation[collection]:
             raise ProductContractRefused(
-                "generation payload must carry at least one point")
+                f"generation payload must carry at least one {collection[:-1]}")
         receipt = _exact_object(
             generation["receipt"],
             {"responses", "response_bytes", "last_response_sha256", "elapsed_s"},
@@ -114,6 +222,10 @@ def validate_note_create_arguments(value: object) -> dict:
         ):
             raise ProductContractRefused(
                 "generation receipt elapsed_s must be a nonnegative number")
+    if "speaker_label_overrides" in arguments:
+        validate_speaker_label_overrides(arguments["speaker_label_overrides"])
+    if "vocabulary_replacements" in arguments:
+        validate_vocabulary_replacements(arguments["vocabulary_replacements"])
     return arguments
 
 
@@ -185,6 +297,42 @@ def validate_transcript_restore_digests(
     return digests
 
 
+def validate_transcript_retry_digests(
+    value: object, arguments: object
+) -> dict:
+    requested = validate_transcript_retry_arguments(arguments)
+    digests = _exact_object(
+        value,
+        {
+            "candidate-transcript",
+            "source-transcript",
+            "capture-session",
+            "capture-mic",
+            "capture-system",
+        },
+        "transcript.retry result digests",
+    )
+    for name, digest in digests.items():
+        _digest(digest, f"transcript.retry {name} digest")
+    if digests["source-transcript"] != requested["source_transcript_sha256"]:
+        raise ProductContractRefused(
+            "transcript.retry result differs from its requested current transcript"
+        )
+    if digests["capture-session"] != requested["capture_session_sha256"]:
+        raise ProductContractRefused(
+            "transcript.retry result differs from its requested capture session"
+        )
+    if digests["capture-mic"] != requested["microphone_audio_sha256"]:
+        raise ProductContractRefused(
+            "transcript.retry result differs from its requested microphone audio"
+        )
+    if digests["capture-system"] != requested["system_audio_sha256"]:
+        raise ProductContractRefused(
+            "transcript.retry result differs from its requested system audio"
+        )
+    return digests
+
+
 def validate_note_create_digests(value: object, source_transcript_sha256: str) -> dict:
     digests = _exact_object(
         value,
@@ -220,6 +368,14 @@ def validate_transcript_restore_join(
             "transcript.restore digests disagree with authoritative artifacts"
         )
     return arguments, view, digests
+
+
+def validate_transcript_retry_join(
+    arguments_value: object, digests_value: object
+) -> tuple[dict, dict]:
+    arguments = validate_transcript_retry_arguments(arguments_value)
+    digests = validate_transcript_retry_digests(digests_value, arguments)
+    return arguments, digests
 
 
 def validate_note_create_join(

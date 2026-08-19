@@ -1,5 +1,33 @@
 # Yawn distribution runbook
 
+## 0.5.8 release receipt
+
+**0.5.8 was released on 2026-08-16 with summary-first local meeting notes.**
+The artifact was built from release-branch commit
+`245fd16bf8aa51a262857440b004f6731fd69cff`; draft PR #72 carries that exact
+source for review.
+
+The signed artifact is `Yawn-0.5.8-macos-arm64.dmg`, 345,630,762 bytes, with
+SHA-256 `207b430d7499b19e44dcc5e68d997e9e9e046eeb5964e48ccc9d40f70d19216d`.
+Apple accepted app submission `cd1407ba-e36a-4f89-b4db-970c44535361` and DMG
+submission `f4855522-06c5-4d24-ba81-379700e33d8f`. Both artifacts were stapled,
+Gatekeeper accepted them with `source=Notarized Developer ID`, and the
+independent signed-release verifier passed with 169 arm64-compatible Mach-O
+files under the `internal-alpha` admission.
+
+The public installer URL returned 200 with the recorded byte count, disk-image
+content type, immutable cache control, and a full streamed SHA-256 match. The
+six immutable note-model objects also returned 200 with the exact byte counts
+in the signed catalog. The 8.06 GB note model remains a separate, verified
+download; it is not embedded in the DMG.
+
+Landing-site commit `310dd93` was manually deployed to Cloudflare Pages as
+production deployment `4b062c2f-a3db-4d24-ba52-61ceb809e88f`. Both that
+immutable deployment and `yawn-site.pages.dev` displayed version 0.5.8, the
+exact public installer URL and checksum, the summary-first note description,
+and the separate note-model disclosure. Draft PR #2 carries the site source
+for review. No superseded installer was deleted during this release.
+
 ## 0.5.7 release receipt
 
 **0.5.7 was released on 2026-08-12 with speech-model management in Settings.**
@@ -321,12 +349,14 @@ Both lanes produce a versioned, signed, notarized DMG for Apple-silicon Macs
 running macOS 14.4 or later. Installation is drag-to-Applications. Updates are
 manual for the first release.
 
-The first lane is an **internal transcript alpha**. It is for capture,
-permission, recovery, retention, and transcript feedback. It carries runtime
-admission `internal-alpha`, shows that label in the application, and never
-presents an automatic note as ready. It requires manual Start and Stop,
-headphones, one operator at the microphone, and nobody else in the room. It is
-not a beta and does not satisfy the automatic-note gate.
+The first lane is an **internal alpha**. It is for capture, permission,
+recovery, retention, transcript feedback, and review of the local generated
+meeting note. It carries runtime admission `internal-alpha` and shows that label
+in the application. Its generated note is explicitly reviewable output: it
+links outcomes to source evidence and labels transcript excerpts as a fallback
+when no summary is available. It requires manual Start and Stop, headphones,
+one operator at the microphone, and nobody else in the room. It is not a beta
+and does not satisfy the product admission gate.
 
 The alpha lane's main window carries the reviewed internal-alpha surface
 command set — capture, Library and exact search, voice status, guided
@@ -491,6 +521,146 @@ Verified on the 2026-08-08 build: `verify` ran 117 tests, `OK`, with **all 16
 `LMN_EMBEDDING_MODEL_DIR` for that reason, because a suite that skipped the only
 tests touching the model would report the same green as one that ran them.
 
+## Fixture-bundle lane (local rendered review, not Preview or a release)
+
+This lane makes a disposable, privacy-safe data set visible in a signed local
+app. It is for checking rendered library, meeting-detail, retry, quality, device,
+decision, and playback states. It is not Preview: Preview tests the signed
+permission surface. It is not production, notarization, installation, or
+shipment.
+
+The bundle and its data root are deliberately separate from every live app:
+
+```text
+app:  /Users/nino/Workspace/dev/apps/yawn-app/target/release/bundle/macos/Yawn Fixture.app
+id:   com.ninochavez.local-meeting-notes.fixture
+root: /Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture
+```
+
+Build and verify from `apps/desktop`:
+
+```bash
+cd apps/desktop
+npm run fixture-build
+npm run fixture-verify
+```
+
+The build script uses `tauri.fixture.conf.json`, signs the resulting app with
+the local Developer ID identity through `prepare-preview-bundle.sh`, and does
+not notarize or package it. As with Preview, restore the generated capability
+schema and lockfile if the build rewrites them before committing:
+
+```bash
+git checkout -- apps/desktop/src-tauri/gen/schemas/capabilities.json \
+                apps/desktop/package-lock.json
+```
+
+### Seed the synthetic root
+
+Build the `rendered-review-fixture` binary, then pass exactly one absolute path.
+The final path component must be the fixture bundle identifier. The command
+creates deterministic invented transcript and retry data, two eight-second
+silent WAVs, and `SYNTHETIC_FIXTURE.json`; it does not create a generated note:
+
+```bash
+cargo run -p local-meeting-notes-session-core --bin rendered-review-fixture -- \
+  "/Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture"
+```
+
+The seed command refuses a relative path, the wrong final component, symlinks,
+a broad parent, an existing root, a root inside the repository, and a directory
+that is not private. The marker must remain the exact synthetic marker. Do not
+copy real meeting material into this root.
+
+### Archive one fixture before seeding the next state
+
+There is no delete or in-place reset command. The bounded rotation command moves
+an exact fixture to a recoverable sibling archive, then leaves the canonical root
+absent for a fresh seed:
+
+```bash
+cargo run -p local-meeting-notes-session-core --bin rendered-review-fixture -- \
+  archive \
+  "/Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture" \
+  "/Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture.archive-keep-current"
+```
+
+The archive destination must be absent, share the source root's canonical
+parent, and end in `.archive-<label>`; the label is 1–64 ASCII letters, digits,
+or hyphens. The command validates the exact synthetic markers, private modes,
+and absence of symlinks, acquires the canonical app-data writer lock, repeats
+the checks under that lock, and publishes the archive with an exclusive atomic
+rename. It refuses a running writer and never deletes, copies, overwrites, or
+automatically reseeds data. After it succeeds, run the seed and verified public
+model-import steps again for the next isolated journey.
+
+### Import one verified public transcript model
+
+The source exposes the only model-import form as:
+
+```bash
+cargo run -p local-meeting-notes-session-core --bin rendered-review-fixture -- \
+  install-model ROOT BUNDLE_RESOURCES SOURCE_MODEL_DIR MODEL_ID
+```
+
+For a real run, use the exact fixture root above, the signed app's Resources
+directory, and a public model directory whose leaf is exactly
+`<model-id>/<catalog-revision>`:
+
+```bash
+cargo run -p local-meeting-notes-session-core --bin rendered-review-fixture -- \
+  install-model \
+  "/Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture" \
+  "/Users/nino/Workspace/dev/apps/yawn-app/target/release/bundle/macos/Yawn Fixture.app/Contents/Resources" \
+  "/absolute/path/<model-id>/<catalog-revision>" \
+  "<model-id>"
+```
+
+Use only a public model that is already present in the verified bundle catalog.
+The importer re-verifies the catalog and source bytes, copies only the catalog's
+config and weights, then activates the model and writes `MODEL_FIXTURE.json`.
+It refuses symlinked or non-directory inputs, repository-contained sources,
+wrong model/revision leaves, existing model state, and source changes during the
+bounded copy. The angle-bracket values above are placeholders, not model names
+or revisions to invent; read the bundle's verified `model-catalog.json` first.
+
+### Rendered receipt — 2026-08-17
+
+Direct observation used the exact signed app at the path above, with bundle ID
+`com.ninochavez.local-meeting-notes.fixture` and root
+`/Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture`.
+The root held only the deterministic invented transcript/retry fixture, two
+eight-second silent WAVs, and a verified public model. The rendered walk opened
+the library and meeting detail, compared the pending retry, inspected recording
+quality and device context, selected **Decide later**, and exercised active
+playback with **Stop** before returning with **Back**. No settings, permissions,
+recording, or private data were involved.
+
+That first receipt did not show **Keep current**, **Use retry**, correction save
+or regeneration, a generated note, a source link or post-promotion state, a
+recovery toast, or an installed production app. It is not evidence of
+notarization, installation, publication, shipment, or production behavior. Do
+not describe it as a release artifact.
+
+### Stateful retry receipt — 2026-08-17
+
+The recoverable archive command preserved the first review root, then two fresh
+deterministic roots exercised the explicit decisions. **Keep current** closed
+the comparison, left the retained transcript selected, replaced **Review retry**
+with **Retry transcript**, and survived Back and reopen. That root is preserved
+as `.archive-keep-current-20260817`.
+
+On the next fresh root, **Use retry** promoted the candidate and returned to
+transcript-only detail with **Generate note** and **Retry transcript**. The
+canonical fixture root preserves that promoted state. The app is closed.
+
+This did not prove invalidation of an existing generated note because the
+fixture had no note. The promotion toast also overclaimed that a previous note
+was cleared. Fix and re-render that message before accepting the promotion
+journey as complete. Back-and-reopen continuity after promotion remains open.
+No private content, real meeting audio, Settings change, permission change, or
+recording was involved.
+
 ## Encoder-candidate lane (admission evidence, not a release)
 
 `worker/build_runtime.sh build-alpha-encoder` builds the alpha runtime plus
@@ -529,6 +699,48 @@ encoder-carrying DMG supplies the field receipt and should be noted in
 RESULTS.md when it arrives. Admission of the encoder is not admission of
 enrolment: the recorder and profile operations stay unregistered until their
 own operator decisions.
+
+## Local Developer ID gate — signed, not released
+
+Use this lane when the app needs the real Developer ID and hardened-runtime
+shape for local verification, but no release has been authorized:
+
+```bash
+scripts/sign-notarize.sh local --admission internal-alpha \
+  "target/release/bundle/macos/Yawn.app"
+```
+
+Use `--admission product` only for a product-admission runtime. The admission
+is mandatory so the command cannot silently choose a wider runtime contract.
+
+The lane runs the same nested signing, manifest refresh, outer signing, deep
+signature check, and signed runtime verifier used before a release. It then
+exits. It does not check the notary profile, submit to Apple for notarization,
+staple, build or sign a DMG, run Gatekeeper, install, or replace an app. The
+default target is the generated app under `target/release/bundle/macos`; do not
+pass an installed app path unless modifying that exact installation is the
+explicit job.
+
+This lane is local in scope, not offline. `codesign --timestamp` contacts
+Apple's timestamp authority. The completion line is deliberately bounded:
+
+```text
+DONE: locally signed and verified app (not notarized or packaged)
+```
+
+On 2026-08-17, the `internal-alpha` lane at commit `644aaaf` signed and verified
+the current unreleased source build, version 0.5.8, at
+`target/release/bundle/macos/Yawn.app`. The app source was built at commit
+`97ff8c9`; this is not the released 0.5.8 artifact recorded at the top of this
+runbook. The verifier confirmed 169 arm64-compatible Mach-O files, identifier
+`com.ninochavez.local-meeting-notes`, Team `34VZ63G58M`, Developer ID authority,
+and the hardened-runtime flag. The signed outer bundle's CDHash is
+`5b878972e00a7a42657fda2abf06076f00b388eb`.
+
+The recorded before/after comparison found the installed
+`/Applications/Yawn.app` binary and the existing DMG unchanged by inode, size,
+and modification time. This receipt is not evidence of notarization,
+installation, publication, or shipment.
 
 ## Check Apple release access
 

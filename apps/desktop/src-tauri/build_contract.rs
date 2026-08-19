@@ -20,6 +20,7 @@ pub const PREVIEW_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes.preview
 pub const PREVIEW_WINDOW: &str = "preview";
 pub const PREVIEW_CAPABILITY: &str = "preview-window";
 pub const PREVIEW_FRONTEND: &str = "../ui";
+pub const FIXTURE_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes.fixture";
 pub const PRODUCTION_IDENTIFIER: &str = "com.ninochavez.local-meeting-notes";
 pub const PRODUCTION_WINDOW: &str = "main";
 pub const PRODUCTION_CAPABILITY: &str = "main-window";
@@ -46,8 +47,17 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "library_snapshot",
     "library_set_meeting_title",
     "library_open_note",
+    "library_play_retained_audio",
+    "library_retained_audio_playback_status",
+    "library_stop_retained_audio",
     "library_open_transcript",
     "library_open_transcript_file",
+    "correct_speaker_name",
+    "local_vocabulary_list",
+    "local_vocabulary_add",
+    "local_vocabulary_edit",
+    "local_vocabulary_set_enabled",
+    "local_vocabulary_delete",
     "library_save_operator_note",
     "preview_delete_meeting_audio",
     "preview_delete_meeting_transcript",
@@ -55,7 +65,11 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "operator_note",
     "save_operator_note",
     "open_current_transcript_file",
+    "restore_withheld_turn",
     "regenerate_note",
+    "transcript_retry_start",
+    "transcript_retry_pending",
+    "transcript_retry_decide",
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,7 +108,7 @@ pub fn validate(mode: BuildMode, config: &Value) -> Result<(), &'static str> {
         BuildMode::Production => Err(
             "the bundled shell requires the production identifier, product frontend, main and Settings capabilities, ad-hoc signing, and local runtime resources",
         ),
-        BuildMode::Preview if is_preview_config(config) => Ok(()),
+        BuildMode::Preview if is_preview_config(config) || is_fixture_config(config) => Ok(()),
         BuildMode::Preview => Err(
             "preview-surface requires the preview identifier, product frontend, product capabilities, ad-hoc signing, and the local runtime resource contract",
         ),
@@ -102,14 +116,26 @@ pub fn validate(mode: BuildMode, config: &Value) -> Result<(), &'static str> {
 }
 
 fn is_preview_config(config: &Value) -> bool {
-    config.get("productName").and_then(Value::as_str) == Some("Yawn Preview")
-        && config.get("identifier").and_then(Value::as_str) == Some(PREVIEW_IDENTIFIER)
-        && config.pointer("/build/frontendDist").and_then(Value::as_str) == Some(PREVIEW_FRONTEND)
-        && has_single_window(
-            config.pointer("/app/windows"),
-            PREVIEW_WINDOW,
-            "Yawn — Preview",
-        )
+    is_preview_surface_config(config, "Yawn Preview", PREVIEW_IDENTIFIER, "Yawn — Preview")
+}
+
+fn is_fixture_config(config: &Value) -> bool {
+    is_preview_surface_config(config, "Yawn Fixture", FIXTURE_IDENTIFIER, "Yawn — Fixture")
+}
+
+fn is_preview_surface_config(
+    config: &Value,
+    product_name: &str,
+    identifier: &str,
+    title: &str,
+) -> bool {
+    config.get("productName").and_then(Value::as_str) == Some(product_name)
+        && config.get("identifier").and_then(Value::as_str) == Some(identifier)
+        && config
+            .pointer("/build/frontendDist")
+            .and_then(Value::as_str)
+            == Some(PREVIEW_FRONTEND)
+        && has_single_window(config.pointer("/app/windows"), PREVIEW_WINDOW, title)
         && has_exact_strings(
             config.pointer("/app/security/capabilities"),
             &[PREVIEW_CAPABILITY, SETTINGS_CAPABILITY],
@@ -133,7 +159,10 @@ fn is_preview_config(config: &Value) -> bool {
 fn is_production_config(config: &Value) -> bool {
     config.get("productName").and_then(Value::as_str) == Some("Yawn")
         && config.get("identifier").and_then(Value::as_str) == Some(PRODUCTION_IDENTIFIER)
-        && config.pointer("/build/frontendDist").and_then(Value::as_str) == Some(PRODUCTION_FRONTEND)
+        && config
+            .pointer("/build/frontendDist")
+            .and_then(Value::as_str)
+            == Some(PRODUCTION_FRONTEND)
         && has_single_window(config.pointer("/app/windows"), PRODUCTION_WINDOW, "Yawn")
         && has_exact_strings(
             config.pointer("/app/security/capabilities"),

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-library-play-retained-audio"
+description = "Enables the library_play_retained_audio command without any pre-configured scope."
+commands.allow = ["library_play_retained_audio"]
+
+[[permission]]
+identifier = "deny-library-play-retained-audio"
+description = "Denies the library_play_retained_audio command without any pre-configured scope."
+commands.deny = ["library_play_retained_audio"]

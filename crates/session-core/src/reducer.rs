@@ -136,6 +136,7 @@ impl Reducer {
                 | (CaptureState::Recording, CaptureState::Stopping)
                 | (CaptureState::Recording, CaptureState::RecoveredInterrupted)
                 | (CaptureState::Stopping, CaptureState::Captured)
+                | (CaptureState::Captured, CaptureState::Idle)
                 | (CaptureState::Stopping, CaptureState::RecoveredInterrupted)
                 | (CaptureState::Captured, CaptureState::Transcribing)
                 | (CaptureState::Transcribing, CaptureState::Summarizing)
@@ -234,17 +235,14 @@ mod tests {
 
         let mut idle = Reducer::default();
         idle.transition_startup(StartupState::Checking).unwrap();
-        assert!(
-            idle.restore_capture_projection(CaptureState::Ready)
-                .is_err()
-        );
+        assert!(idle
+            .restore_capture_projection(CaptureState::Ready)
+            .is_err());
 
         let mut shell = Reducer::default();
-        assert!(
-            shell
-                .restore_capture_projection(CaptureState::TranscriptReady)
-                .is_err()
-        );
+        assert!(shell
+            .restore_capture_projection(CaptureState::TranscriptReady)
+            .is_err());
     }
 
     #[test]

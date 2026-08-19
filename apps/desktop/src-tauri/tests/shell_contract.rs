@@ -22,9 +22,18 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "library_snapshot",
     "library_set_meeting_title",
     "library_open_note",
+    "library_play_retained_audio",
+    "library_retained_audio_playback_status",
+    "library_stop_retained_audio",
     "preview_library_open_evidence",
     "library_open_transcript",
     "library_open_transcript_file",
+    "correct_speaker_name",
+    "local_vocabulary_list",
+    "local_vocabulary_add",
+    "local_vocabulary_edit",
+    "local_vocabulary_set_enabled",
+    "local_vocabulary_delete",
     "library_save_operator_note",
     "preview_delete_meeting_audio",
     "preview_delete_meeting_transcript",
@@ -32,11 +41,19 @@ const PRODUCT_COMMANDS: &[&str] = &[
     "operator_note",
     "save_operator_note",
     "open_current_transcript_file",
+    "restore_withheld_turn",
     // Admitted with the generation invocation chain (docs/
     // note-runtime-decision.md, slice 4): the rendered control can reach a
     // terminal receipt now, so the command joins the pinned product set.
     "regenerate_note",
+    // Retry creation, resume, and decision are all invoked by the comparison
+    // sheet and therefore belong to the pinned product command set.
+    "transcript_retry_start",
+    "transcript_retry_pending",
+    "transcript_retry_decide",
 ];
+
+const NATIVE_ONLY_COMMANDS: &[&str] = &[];
 
 const MAIN_PERMISSIONS: &[&str] = &[
     "core:window:allow-start-dragging",
@@ -53,9 +70,18 @@ const MAIN_PERMISSIONS: &[&str] = &[
     "allow-library-snapshot",
     "allow-library-set-meeting-title",
     "allow-library-open-note",
+    "allow-library-play-retained-audio",
+    "allow-library-retained-audio-playback-status",
+    "allow-library-stop-retained-audio",
     "allow-preview-library-open-evidence",
     "allow-library-open-transcript",
     "allow-library-open-transcript-file",
+    "allow-correct-speaker-name",
+    "allow-local-vocabulary-list",
+    "allow-local-vocabulary-add",
+    "allow-local-vocabulary-edit",
+    "allow-local-vocabulary-set-enabled",
+    "allow-local-vocabulary-delete",
     "allow-library-save-operator-note",
     "allow-preview-delete-meeting-audio",
     "allow-preview-delete-meeting-transcript",
@@ -63,7 +89,11 @@ const MAIN_PERMISSIONS: &[&str] = &[
     "allow-operator-note",
     "allow-save-operator-note",
     "allow-open-current-transcript-file",
+    "allow-restore-withheld-turn",
     "allow-regenerate-note",
+    "allow-transcript-retry-start",
+    "allow-transcript-retry-pending",
+    "allow-transcript-retry-decide",
 ];
 
 fn permissions(source: &str) -> Vec<String> {
@@ -85,21 +115,56 @@ fn product_builds_keep_one_frontend_and_two_bounded_windows() {
     assert!(build_contract::validate(build_contract::BuildMode::Preview, &preview).is_ok());
     assert_eq!(production["build"]["frontendDist"], "../ui");
     assert_eq!(preview["build"]["frontendDist"], "../ui");
-    assert_eq!(production["app"]["security"]["capabilities"], serde_json::json!(["main-window", "settings-window"]));
-    assert_eq!(preview["app"]["security"]["capabilities"], serde_json::json!(["preview-window", "settings-window"]));
+    assert_eq!(
+        production["app"]["security"]["capabilities"],
+        serde_json::json!(["main-window", "settings-window"])
+    );
+    assert_eq!(
+        preview["app"]["security"]["capabilities"],
+        serde_json::json!(["preview-window", "settings-window"])
+    );
 }
 
 #[test]
 fn product_windows_have_only_the_commands_the_new_surface_uses() {
     let main = permissions(include_str!("../capabilities/product/main.json"));
     let preview = permissions(include_str!("../capabilities/product/preview.json"));
-    let expected: Vec<String> = MAIN_PERMISSIONS.iter().map(|permission| (*permission).to_owned()).collect();
+    let expected: Vec<String> = MAIN_PERMISSIONS
+        .iter()
+        .map(|permission| (*permission).to_owned())
+        .collect();
 
     assert_eq!(main, expected);
     assert_eq!(preview, expected);
-    for forbidden in ["profile", "folder", "layout", "corpus", "reference"] {
-        assert!(main.iter().all(|permission| !permission.contains(forbidden)));
+    for forbidden in [
+        "profile",
+        "folder",
+        "layout",
+        "corpus",
+        "reference",
+        "shell",
+        "fs",
+    ] {
+        assert!(
+            main.iter()
+                .all(|permission| !permission.contains(forbidden))
+        );
     }
+}
+
+#[test]
+fn retained_audio_playback_stays_on_the_fixed_native_standard_input_route() {
+    let source = include_str!("../src/main.rs");
+    assert!(source.contains("const RETAINED_AUDIO_PLAYER: &str = \"/usr/bin/afplay\""));
+    assert!(source.contains("const RETAINED_AUDIO_STDIN: &str = \"/dev/stdin\""));
+    assert!(source.contains("Command::new(RETAINED_AUDIO_PLAYER)"));
+    assert!(source.contains(".stdin(Stdio::from(input))"));
+    let playback_impl = &source[source.find("impl RetainedAudioPlayback").unwrap()
+        ..source.find("struct RetainedAudioPlaybackResponse").unwrap()];
+    assert!(!playback_impl.contains("pre_exec("));
+    assert!(!source.contains("/dev/fd/3"));
+    assert!(!source.contains("tauri_plugin_shell"));
+    assert!(!source.contains("tauri_plugin_fs"));
 }
 
 #[test]
@@ -125,24 +190,37 @@ fn every_frontend_call_has_a_matching_product_permission() {
         let permitted = permissions(source);
         for command in invoked {
             let needed = format!("allow-{}", command.replace('_', "-"));
-            assert!(permitted.contains(&needed), "missing permission for {command}");
+            assert!(
+                permitted.contains(&needed),
+                "missing permission for {command}"
+            );
         }
     }
 
     let main_invoked = invoked_commands(
         include_str!("../../ui/main.js"),
-        &["first_run_request_microphone", "first_run_request_system_audio"],
+        &[
+            "first_run_request_microphone",
+            "first_run_request_system_audio",
+        ],
     );
     let settings_invoked = invoked_commands(
         include_str!("../../ui/settings.js"),
-        &["first_run_request_microphone", "first_run_request_system_audio"],
+        &[
+            "first_run_request_microphone",
+            "first_run_request_system_audio",
+        ],
     );
     let mut invoked = main_invoked.clone();
     invoked.extend(settings_invoked.clone());
     invoked.sort();
     invoked.dedup();
 
-    let mut expected: Vec<String> = PRODUCT_COMMANDS.iter().map(|command| (*command).to_owned()).collect();
+    let mut expected: Vec<String> = PRODUCT_COMMANDS
+        .iter()
+        .filter(|command| !NATIVE_ONLY_COMMANDS.contains(command))
+        .map(|command| (*command).to_owned())
+        .collect();
     expected.sort();
     assert_eq!(invoked, expected);
     for source in [
@@ -196,14 +274,27 @@ fn settings_can_only_manage_audio_access_and_local_speech_models() {
 #[test]
 fn desktop_handler_exposes_the_same_small_product_command_set() {
     let source = include_str!("../src/main.rs");
-    let handler_start = source.find(".invoke_handler(tauri::generate_handler![").unwrap();
+    let handler_start = source
+        .find(".invoke_handler(tauri::generate_handler![")
+        .unwrap();
     let handler_end = source[handler_start..].find("])\n        .setup").unwrap() + handler_start;
     let handler = &source[handler_start..handler_end];
 
     for command in PRODUCT_COMMANDS {
-        assert!(handler.contains(command), "handler does not register {command}");
+        assert!(
+            handler.contains(command),
+            "handler does not register {command}"
+        );
     }
-    for retired in ["get_desktop_layout", "preview_profile", "library_create_folder", "corpus_search"] {
-        assert!(!handler.contains(retired), "retired command remains in the product handler: {retired}");
+    for retired in [
+        "get_desktop_layout",
+        "preview_profile",
+        "library_create_folder",
+        "corpus_search",
+    ] {
+        assert!(
+            !handler.contains(retired),
+            "retired command remains in the product handler: {retired}"
+        );
     }
 }

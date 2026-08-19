@@ -41,12 +41,15 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::meeting::{
-    MAX_RECEIPT_BYTES, MeetingError, load_meeting, open_private_file, read_private_bytes,
-    require_private_directory, valid_opaque_id,
+    load_meeting, open_private_file, read_private_bytes, require_private_directory,
+    valid_opaque_id, MeetingError, MAX_RECEIPT_BYTES,
 };
 use crate::meeting_coordination::{MeetingCoordinationError, MeetingStorageCoordination};
 use crate::operation_store::{OperationStore, OperationStoreError, StoredOperationRequest};
-use crate::storage::{StorageRoot, create_private_dir, durable_create_new, durable_replace};
+use crate::storage::{create_private_dir, durable_create_new, durable_replace, StorageRoot};
+use crate::transcription_queue::{
+    TranscriptionQueue, TranscriptionQueueError, TranscriptionTerminalKind,
+};
 
 /// Directory holding deletion receipts, as a child of the storage root.
 ///
@@ -121,6 +124,10 @@ pub enum MeetingDeletionError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     OperationStore(#[from] OperationStoreError),
+    #[error(transparent)]
+    TranscriptionQueue(#[from] TranscriptionQueueError),
+    #[error("meeting has nonterminal transcription work")]
+    NonterminalTranscription,
     #[error("meeting has a nonterminal product operation")]
     NonterminalProductOperation,
     #[error("meeting deletion receipt is malformed")]
@@ -370,6 +377,8 @@ pub(crate) fn delete_meeting_wholly(
         return Err(MeetingError::Malformed("meeting identifier mismatch").into());
     }
 
+    ensure_transcription_safe_for_destructive_work(storage, meeting_id)?;
+
     let operations = OperationStore::open(storage)?;
     let has_nonterminal = operations.scan()?.values().any(|receipt| {
         if receipt.commit.is_some() {
@@ -400,6 +409,41 @@ pub(crate) fn delete_meeting_wholly(
     write_receipt(&receipt_path, &receipt, true)?;
     finish_removal(storage, &meeting_dir, &receipt_path, receipt)?;
     Ok(MeetingDeletionOutcome::MeetingRemoved)
+}
+
+/// Whole-meeting deletion must preserve source audio until transcription is
+/// either committed or has reached an ordinary terminal failure. Discovery is
+/// authoritative and errors refuse deletion rather than being treated as an
+/// absent queue.
+fn ensure_transcription_safe_for_destructive_work(
+    storage: &StorageRoot,
+    meeting_id: &str,
+) -> Result<(), MeetingDeletionError> {
+    let discovery = TranscriptionQueue::open(storage)?.discover()?;
+    if discovery
+        .orphan_captured_meetings
+        .iter()
+        .any(|id| id == meeting_id)
+        || discovery.items.iter().any(|item| {
+            if item.request.meeting_id != meeting_id {
+                return false;
+            }
+            if item.commit.is_some() {
+                return false;
+            }
+            if item
+                .terminal
+                .as_ref()
+                .is_some_and(|terminal| terminal.kind == TranscriptionTerminalKind::Failed)
+            {
+                return false;
+            }
+            true
+        })
+    {
+        return Err(MeetingDeletionError::NonterminalTranscription);
+    }
+    Ok(())
 }
 
 /// Identifiers with a deletion receipt that has not reached `removed`.
@@ -463,8 +507,8 @@ pub fn reconcile_pending_meeting_deletions(
 mod tests {
     use super::*;
     use crate::meeting::{
-        AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts, MeetingLifecycle,
-        MeetingRecord, MeetingSchema, artifact_ref, retention_policy_sha256,
+        artifact_ref, retention_policy_sha256, AudioRetention, AudioRetentionRule, AudioState,
+        MeetingArtifacts, MeetingLifecycle, MeetingRecord, MeetingSchema,
     };
     use crate::storage::durable_create_new;
     use tempfile::TempDir;
@@ -484,6 +528,7 @@ mod tests {
         let directory = storage.resolve(&Path::new("meetings").join(id)).unwrap();
         create_private_dir(&directory).unwrap();
         create_private_dir(&directory.join("capture")).unwrap();
+        create_private_dir(&directory.join("transcription-queue")).unwrap();
         for (relative, bytes) in [
             ("attempt.json", b"attempt".as_slice()),
             ("ownership.json", b"ownership".as_slice()),
@@ -839,6 +884,21 @@ mod tests {
             1,
             "the folder itself is organization, not the deleted meeting's"
         );
+    }
+
+    #[test]
+    fn whole_meeting_deletion_refuses_the_only_captured_orphan() {
+        let (_temp, storage) = storage();
+        let directory = fixture(&storage, "captured-orphan");
+        fs::remove_dir(directory.join("transcription-queue")).unwrap();
+        let coordination = MeetingStorageCoordination::default();
+
+        assert!(matches!(
+            delete_meeting_wholly(&storage, &coordination, "captured-orphan"),
+            Err(MeetingDeletionError::NonterminalTranscription)
+        ));
+        assert!(directory.exists());
+        assert!(directory.join("capture/mic.wav").exists());
     }
 
     /// A crash between the row removal and the `staged` transition resumes.

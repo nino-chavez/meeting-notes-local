@@ -306,6 +306,7 @@ class WorkerProtocolTests(unittest.TestCase):
                 "capture.finalize",
                 "capture.inspect",
                 "transcript.create",
+                "transcript.retry",
                 "sitting.derive",
                 "transcript.restore",
                 "profile.choices",
@@ -320,11 +321,13 @@ class WorkerProtocolTests(unittest.TestCase):
                 # decision: the deterministic candidate-point assembler needs no
                 # model in this worker, so there is nothing it can only refuse.
                 "note.create",
+                # The coordinator re-inspects every published note before the
+                # meeting record advances in every admitted lane.
+                "note.inspect",
             }
             if self.admission != "internal-alpha":
                 expected_operations |= {
                     "profile.adopt",
-                    "note.inspect",
                 }
             self.assertEqual(set(worker.ready["operations"]), expected_operations)
             inspected = worker.request("capture.inspect", {"meeting_id": meeting_id})
@@ -975,6 +978,20 @@ while True:
         )
         self.assertIsNone(heartbeat)
 
+    def test_transcription_heartbeat_is_started_for_transcript_retry(self) -> None:
+        from worker.main import start_transcription_heartbeat
+
+        heartbeat = start_transcription_heartbeat(
+            str(uuid.uuid4()),
+            "transcript.retry",
+            {"meeting_id": str(uuid.uuid4())},
+            protocol_output=io.StringIO(),
+        )
+        self.assertIsNotNone(heartbeat)
+        stopped, thread = heartbeat
+        stopped.set()
+        thread.join()
+
     def test_note_generation_heartbeat_uses_the_protocol_stream(self) -> None:
         from worker.main import start_note_generation_heartbeat
 
@@ -1187,6 +1204,26 @@ class ProductOperationContractTests(unittest.TestCase):
             with self.subTest(rejected_field=field):
                 with self.assertRaises(ProductContractRefused):
                     validate_note_create_error(changed)
+
+    def test_note_create_overlay_is_exact_and_bounded(self) -> None:
+        arguments = dict(self.fixture["accepted_note"]["worker_arguments"])
+        arguments["speaker_label_overrides"] = [
+            {"source_speaker": "Them", "replacement": "Alex"}
+        ]
+        validate_note_create_arguments(arguments)
+
+        for override in (
+            [{"source_speaker": "Other", "replacement": "Alex"}],
+            [{"source_speaker": "Them", "replacement": " Alex "}],
+            [
+                {"source_speaker": "Them", "replacement": "Alex"},
+                {"source_speaker": "Me", "replacement": "Nino"},
+            ],
+        ):
+            changed = dict(arguments)
+            changed["speaker_label_overrides"] = override
+            with self.subTest(override=override), self.assertRaises(ProductContractRefused):
+                validate_note_create_arguments(changed)
 
 
 class ProductArtifactAdapterTests(unittest.TestCase):
@@ -1490,6 +1527,84 @@ class ProductArtifactAdapterTests(unittest.TestCase):
                 },
                 encoder_digest="0" * 64,
             )
+
+    def test_note_create_dispatch_publishes_structured_generation_claims(self) -> None:
+        import candidate_first
+        from summarize import build_fragment_map, structured_artifact_citations
+
+        meeting_id = str(uuid.uuid4())
+        _, transcript_id, _pack = self._write_note_transcript(meeting_id)
+        transcript = resolve_transcript(self.root, meeting_id, transcript_id)
+        manifest = candidate_first.generate_manifest(
+            transcript,
+            candidate_first.STRATEGY_BROAD,
+            contract=candidate_first.PRODUCT_CONTRACT,
+        )
+        fragments = {
+            fragment["source_fragment_id"]: fragment
+            for fragment in build_fragment_map(transcript)["fragments"]
+        }
+        kept = manifest["candidates"][:2]
+        claims = []
+        for index, (claim_type, candidate) in enumerate(
+            zip(("summary", "proposal"), kept, strict=True)
+        ):
+            anchor = fragments[candidate["anchor_fragment_id"]]
+            locator = {
+                "turn": anchor["turn"],
+                "start": anchor["char_start"],
+                "end": anchor["char_end"],
+                "text_sha256": anchor["text_sha256"],
+            }
+            claims.append({
+                "claim_ordinal": index,
+                "claim_type": claim_type,
+                "claim": transcript.turns[locator["turn"]].text[
+                    locator["start"]:locator["end"]
+                ],
+                "candidate_ids": [candidate["candidate_id"]],
+                "evidence_state": "located",
+                "locators": [locator],
+            })
+        arguments = {
+            "meeting_id": meeting_id,
+            "source_transcript_sha256": transcript_id,
+            "generation": {
+                "schema": "note-generation/2",
+                "transcript_sha256": transcript_id,
+                "manifest_sha256": manifest["manifest_sha256"],
+                "candidates": len(manifest["candidates"]),
+                "claims": claims,
+                "receipt": {
+                    "responses": len(kept) + 1,
+                    "response_bytes": 128,
+                    "last_response_sha256": "0" * 64,
+                    "elapsed_s": 12.5,
+                },
+            },
+        }
+        result = adapters.dispatch(
+            self.root, "note.create", arguments, encoder_digest="0" * 64
+        )
+        document = json.loads(
+            (
+                self.root
+                / "meetings"
+                / meeting_id
+                / "notes"
+                / (result["note"] + ".json")
+            ).read_text()
+        )
+        self.assertIs(document["passed"], True)
+        self.assertEqual(
+            document["claim_evidence_contract"],
+            "candidate-synthesis-evidence/1",
+        )
+        citations = structured_artifact_citations(document, transcript)
+        self.assertEqual(
+            [row["type"] for row in citations["cited"]],
+            ["summary", "proposal"],
+        )
 
     def test_note_publication_repairs_orphan_markdown_but_refuses_collision_bytes(self) -> None:
         meeting_id = str(uuid.uuid4())
@@ -2269,12 +2384,13 @@ class SittingDerivationTests(unittest.TestCase):
                 admission="boundary-test",
             )
 
-    def test_alpha_set_carries_enrollment_but_not_adopt_or_notes(self) -> None:
+    def test_alpha_set_carries_note_reinspection_but_not_profile_adopt(self) -> None:
         # Widened 2026-08-04 (sitting.derive, transcript.restore) and
         # 2026-08-05 (profile choices/build/inspect/discard) by the
         # operator's registration decisions. profile.adopt stays boundary
-        # lane — the packaged publication path is Rust's — and note.inspect
-        # waits on an admitted note generator.
+        # lane — the packaged publication path is Rust's. note.inspect is in
+        # alpha because the coordinator must re-verify a published note before
+        # advancing the meeting record.
         from worker.main import operations_for
 
         self.assertIn("sitting.derive", operations_for("internal-alpha"))
@@ -2283,7 +2399,7 @@ class SittingDerivationTests(unittest.TestCase):
         self.assertIn("profile.inspect", operations_for("internal-alpha"))
         self.assertIn("profile.discard", operations_for("internal-alpha"))
         self.assertNotIn("profile.adopt", operations_for("internal-alpha"))
-        self.assertNotIn("note.inspect", operations_for("internal-alpha"))
+        self.assertIn("note.inspect", operations_for("internal-alpha"))
         self.assertIn("profile.adopt", operations_for("boundary-test"))
 
 

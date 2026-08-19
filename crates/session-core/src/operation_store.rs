@@ -492,6 +492,10 @@ fn validate_commit_matches_receipts(
                 NoteGenerationStatus::Accepted => ProductOperationOutcome::NoteAccepted,
                 NoteGenerationStatus::Rejected => ProductOperationOutcome::NoteRejected,
             };
+            let current_note = match result.status {
+                NoteGenerationStatus::Accepted => result.note.as_ref(),
+                NoteGenerationStatus::Rejected => request.prior_note.as_ref(),
+            };
             commit.operation_id == request.operation_id
                 && commit.meeting_id == request.meeting_id
                 && commit.kind == ProductOperationKind::GenerateNote
@@ -499,7 +503,7 @@ fn validate_commit_matches_receipts(
                 && commit.request_sha256 == request_digest
                 && commit.result_sha256 == result_digest
                 && commit.current_transcript_sha256 == request.source_transcript_sha256
-                && commit.current_note == result.note
+                && commit.current_note.as_ref() == current_note
         }
         _ => false,
     };

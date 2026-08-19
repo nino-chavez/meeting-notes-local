@@ -233,6 +233,18 @@ impl NoteGenerationCoordinator {
         &self,
         arguments: &RegenerateNoteUiArgs,
     ) -> Result<Uuid, NoteGenerationCoordinatorError> {
+        self.regenerate_note_with(arguments, |_| Ok(()))
+    }
+
+    /// Runs the caller's source-side admission under the meeting lease and
+    /// before a replacement request exists. Desktop uses this for correction
+    /// overlays that are local to its storage layer; session-core keeps no
+    /// correction sidecar authority of its own.
+    pub fn regenerate_note_with(
+        &self,
+        arguments: &RegenerateNoteUiArgs,
+        source_admission: impl FnOnce(&Path) -> Result<(), NoteGenerationCoordinatorError>,
+    ) -> Result<Uuid, NoteGenerationCoordinatorError> {
         arguments.validate()?;
         let _lease = self
             .coordination
@@ -252,12 +264,20 @@ impl NoteGenerationCoordinator {
             arguments.meeting_id,
             &arguments.source_transcript_sha256,
         )?;
+        source_admission(&meeting_dir)?;
         let request = NoteGenerationRequest {
-            schema: NoteGenerationRequestSchema::V1,
+            schema: if meeting.artifacts.current_note.is_some() {
+                NoteGenerationRequestSchema::V2
+            } else {
+                NoteGenerationRequestSchema::V1
+            },
             operation_id: self.identities.operation_id(),
             meeting_id: arguments.meeting_id,
             requested_at_epoch_seconds: self.identities.now_epoch_seconds(),
             source_transcript_sha256: arguments.source_transcript_sha256.clone(),
+            speaker_label_overrides: arguments.speaker_label_overrides.clone(),
+            vocabulary_replacements: arguments.vocabulary_replacements.clone(),
+            prior_note: meeting.artifacts.current_note.clone(),
         };
         request.validate()?;
         self.operations
@@ -353,6 +373,8 @@ impl NoteGenerationCoordinator {
         let arguments = NoteCreateWorkerArgs {
             meeting_id: request.meeting_id,
             source_transcript_sha256: request.source_transcript_sha256.clone(),
+            speaker_label_overrides: request.speaker_label_overrides.clone(),
+            vocabulary_replacements: request.vocabulary_replacements.clone(),
         };
         let result = match self.worker.create(&arguments)? {
             NoteWorkerResult::Accepted(worker_digests) => {
@@ -501,14 +523,17 @@ impl NoteGenerationCoordinator {
         let current = meeting.artifacts.current_transcript.as_ref().ok_or(
             NoteGenerationCoordinatorError::Ambiguous("meeting has no current transcript"),
         )?;
-        if classify_note_recovery(
+        let recovery = classify_note_recovery(
             request,
             Some(result),
             meeting.lifecycle,
             &current.sha256,
             meeting.artifacts.current_note.as_ref(),
-        )? != IncompleteOperationRecovery::ApplyValidatedResult
-        {
+        )?;
+        if recovery == IncompleteOperationRecovery::WriteMissingCommit {
+            return self.write_terminal_commit(meeting_dir, request, result);
+        }
+        if recovery != IncompleteOperationRecovery::ApplyValidatedResult {
             return Err(NoteGenerationCoordinatorError::Ambiguous(
                 "meeting no longer accepts the validated result",
             ));
@@ -520,8 +545,13 @@ impl NoteGenerationCoordinator {
                 meeting.artifacts.current_note = result.note.clone();
             }
             NoteGenerationStatus::Rejected => {
-                meeting.lifecycle = MeetingLifecycle::SummaryFailed;
-                meeting.artifacts.current_note = None;
+                if request.prior_note.is_some() {
+                    meeting.lifecycle = MeetingLifecycle::Ready;
+                    meeting.artifacts.current_note = request.prior_note.clone();
+                } else {
+                    meeting.lifecycle = MeetingLifecycle::SummaryFailed;
+                    meeting.artifacts.current_note = None;
+                }
             }
         }
         write_meeting(meeting_dir, &meeting)?;
@@ -608,12 +638,14 @@ impl NoteGenerationCoordinator {
                 "meeting current transcript changed",
             ));
         }
-        if meeting.artifacts.current_note.is_some()
-            || !matches!(
-                meeting.lifecycle,
+        let can_generate = matches!(
+            (&meeting.artifacts.current_note, meeting.lifecycle),
+            (
+                None,
                 MeetingLifecycle::TranscriptReady | MeetingLifecycle::SummaryFailed
-            )
-        {
+            ) | (Some(_), MeetingLifecycle::Ready)
+        );
+        if !can_generate {
             return Err(NoteGenerationCoordinatorError::Ambiguous(
                 "meeting lifecycle cannot accept note generation",
             ));
@@ -974,7 +1006,52 @@ mod tests {
             RegenerateNoteUiArgs {
                 meeting_id: self.meeting_id,
                 source_transcript_sha256: self.transcript.clone(),
+                speaker_label_overrides: Vec::new(),
+                vocabulary_replacements: Vec::new(),
             }
+        }
+
+        fn install_prior_note(&self) -> NoteRevisionRef {
+            let markdown = b"# prior note\n";
+            let document = format!(
+                "{{\"schema\":\"note/2\",\"meeting\":\"{}\",\"transcript\":\"{}\",\"prior\":true}}\n",
+                self.meeting_id, self.transcript
+            )
+            .into_bytes();
+            let markdown_sha = digest_bytes(markdown);
+            let note_sha = digest_bytes(&document);
+            durable_create_new(
+                &self
+                    .meeting_dir
+                    .join("notes")
+                    .join(format!("{markdown_sha}.md")),
+                markdown,
+            )
+            .unwrap();
+            durable_create_new(
+                &self
+                    .meeting_dir
+                    .join("notes")
+                    .join(format!("{note_sha}.json")),
+                &document,
+            )
+            .unwrap();
+            let note = NoteRevisionRef {
+                json: ArtifactRef {
+                    relative_path: format!("notes/{note_sha}.json"),
+                    sha256: note_sha,
+                },
+                markdown: ArtifactRef {
+                    relative_path: format!("notes/{markdown_sha}.md"),
+                    sha256: markdown_sha,
+                },
+                source_transcript_sha256: self.transcript.clone(),
+            };
+            let mut meeting = load_meeting(&self.meeting_dir).unwrap();
+            meeting.lifecycle = MeetingLifecycle::Ready;
+            meeting.artifacts.current_note = Some(note.clone());
+            write_meeting(&self.meeting_dir, &meeting).unwrap();
+            note
         }
     }
 
@@ -1065,6 +1142,29 @@ mod tests {
     }
 
     #[test]
+    fn ready_meeting_can_replace_its_note_and_preserves_the_prior_on_rejection() {
+        let accepted = Fixture::new(false);
+        let prior = accepted.install_prior_note();
+        accepted
+            .coordinator(Arc::new(NoNoteGenerationFailureInjection))
+            .regenerate_note(&accepted.arguments())
+            .unwrap();
+        let meeting = load_meeting(&accepted.meeting_dir).unwrap();
+        assert_eq!(meeting.lifecycle, MeetingLifecycle::Ready);
+        assert_ne!(meeting.artifacts.current_note.as_ref(), Some(&prior));
+
+        let rejected = Fixture::new(true);
+        let prior = rejected.install_prior_note();
+        rejected
+            .coordinator(Arc::new(NoNoteGenerationFailureInjection))
+            .regenerate_note(&rejected.arguments())
+            .unwrap();
+        let meeting = load_meeting(&rejected.meeting_dir).unwrap();
+        assert_eq!(meeting.lifecycle, MeetingLifecycle::Ready);
+        assert_eq!(meeting.artifacts.current_note, Some(prior));
+    }
+
+    #[test]
     fn pending_storage_refuses_before_worker_or_receipt() {
         let fixture = Fixture::new(false);
         let mut meeting = load_meeting(&fixture.meeting_dir).unwrap();
@@ -1095,6 +1195,8 @@ mod tests {
         let arguments = RegenerateNoteUiArgs {
             meeting_id: fixture.meeting_id,
             source_transcript_sha256: "a".repeat(64),
+            speaker_label_overrides: Vec::new(),
+            vocabulary_replacements: Vec::new(),
         };
         assert!(matches!(
             fixture
@@ -1112,6 +1214,41 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn source_admission_refuses_before_worker_or_replacement_receipt() {
+        let fixture = Fixture::new(false);
+        let worker = Arc::new(Worker {
+            meeting_dir: fixture.meeting_dir.clone(),
+            rejected: false,
+            calls: Mutex::new(0),
+        });
+        let coordinator = NoteGenerationCoordinator::with_runtime(
+            fixture.storage.clone(),
+            fixture.coordination.clone(),
+            worker.clone(),
+            Arc::new(Inspector),
+            Arc::new(Identity {
+                id: Uuid::parse_str(OPERATION_ID).unwrap(),
+                times: Mutex::new(VecDeque::from([1])),
+            }),
+            Arc::new(NoNoteGenerationFailureInjection),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            coordinator.regenerate_note_with(&fixture.arguments(), |_| {
+                Err(NoteGenerationCoordinatorError::Ambiguous("source admission refused"))
+            }),
+            Err(NoteGenerationCoordinatorError::Ambiguous("source admission refused"))
+        ));
+        assert_eq!(worker.calls(), 0);
+        assert!(OperationStore::open(&fixture.storage)
+            .unwrap()
+            .scan()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1196,6 +1333,9 @@ mod tests {
                         meeting_id: fixture.meeting_id,
                         requested_at_epoch_seconds: 1,
                         source_transcript_sha256: fixture.transcript.clone(),
+                        speaker_label_overrides: Vec::new(),
+                        vocabulary_replacements: Vec::new(),
+                        prior_note: None,
                     },
                 ))
                 .unwrap();

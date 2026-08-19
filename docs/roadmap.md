@@ -1,0 +1,718 @@
+# Yawn product roadmap — trust before reach
+
+Status: active product direction as of 2026-08-17.
+
+This roadmap sequences product work. It does not claim that a listed feature is
+shipped. The current product contract remains [the product brief](product-brief.md).
+
+## The decision
+
+Yawn should make the transcript easier to trust and correct before it expands
+into broader meeting intelligence.
+
+Local vocabulary is now visible and editable in meeting review, and its exact
+replacements reach future generated notes without changing the retained
+transcript. Recording-quality evidence and the source-bound transcription retry
+journey are now built in Preview. A reader can compare the current transcript
+with a separate retry, keep the current version, or promote the retry without
+silently regenerating the note. The exact fixture now proves the read-only
+review, quality, device, playback, Keep-current, and Promote-retry states;
+generated-note invalidation and production-package gates remain open.
+Cross-meeting questions can follow once the source record is reliable.
+Cloud accounts, automatic call detection, meeting bots, and live meeting chat do
+not enter the roadmap through competitor comparison alone.
+
+## What the live apps changed
+
+The 2026-08-16 desktop comparison checked Granola 7.478.0, Wispr Flow
+1.6.447, and the installed Yawn 0.5.7 without starting a recording or changing
+meeting data. It produced three decisions.
+
+**Evidence labels.** “Observed” means the rendered desktop app was inspected
+directly. “Verified in source” means the current Yawn code or product brief was
+read. “Inferred” means the recommendation combines those two evidence classes;
+it is product judgment, not a claim about an unobserved competitor behavior.
+
+| Journey | Granola — observed | Wispr Flow — observed | Yawn — observed or source-verified | Yawn decision — inferred |
+|---|---|---|---|---|
+| Home and history | Meeting library leads; search and secondary workspace structure remain nearby | Product hub exposes history, usage, settings, and adjacent tools | Installed 0.5.7 returned from a readable transcript to an empty library; the 0.5.8 preview continuity journey passed | Keep one local meeting library and make continuity a release gate |
+| Recording entry | Capture stays subordinate to the meeting and note journey | Notetaker entry is one part of a larger dictation product | Explicit consent and start action are source-verified product boundaries | Preserve explicit consent; do not add automatic call detection |
+| Review attention | Generated note occupies the primary reading path; transcript and search disclose nearby | Repair and settings surfaces make learned words and retry actions visible | Summary-first note, separate personal notes, and transcript evidence are source-verified | Keep the note primary; disclose transcript, provenance, and repair at the point of doubt |
+| Correction and recovery | Source context stays available beside generated material | A failed Insights view exposed one retry and recovered; dictionary entries are visible and editable | Speaker correction now preserves the transcript and records a separate local operation | Add exact repair actions, local vocabulary, and versioned retries without replacing the last usable result |
+| Expansion pressure | Team spaces, templates, connectors, sharing, and chat broaden the workspace | Scores, streaks, quotas, referrals, transforms, and scratchpad broaden the product hub | Yawn is a private local meeting reviewer | Do not copy adjacent engagement, collaboration, or account architecture |
+
+**Take Granola's meeting posture, not its workspace.** Granola keeps the note in
+the main reading path and puts the transcript, transcript search, and source
+context behind nearby controls. Yawn should preserve that progressive
+disclosure. It should not add team spaces, connectors, sharing defaults,
+calendar organization, chat, or templates to reproduce Granola's information
+architecture.
+
+**Take Wispr Flow's repair clarity, not its product hub.** A failed Insights
+view exposed one **Try again** action, and the retry recovered the view. Its
+dictionary also makes learned words visible and editable. Those are useful
+models for Yawn's exact-repair and local-vocabulary work. Usage scores, streaks,
+quotas, referrals, transforms, and a separate scratchpad solve other jobs and
+stay out.
+
+**Treat journey continuity as a release gate.** The installed Yawn identified
+itself as 0.5.7 while this source declares 0.5.8. A completed transcript was
+readable in the installed app, but **Back to Meetings** opened an empty library.
+That observation does not prove the 0.5.8 source has the same defect. It does
+prove that a packaged build must pass the complete-meeting, reopen-from-library
+journey before its note or library work counts as shipped.
+
+## The source baseline
+
+The Yawn 0.5.8 source already provides the part many meeting tools treat as the
+end goal:
+
+- A generated note leads with an overview
+- Decisions, follow-ups, ideas, and open questions are separated
+- Generated claims link back to retained transcript evidence
+- The full transcript remains available for verification
+- Personal notes remain separate from generated claims
+- Capture, transcription, and meeting storage stay on this Mac
+
+The summary-first note is the baseline. It is not another roadmap item.
+
+## Roadmap at a glance
+
+| Order | Product outcome | State | Governing constraint |
+|---|---|---|---|
+| 0 | A completed meeting remains visible and reopens from Meetings in the packaged app | Preview passed; release package pending | A readable artifact must not disappear from its own journey |
+| 1a | The reader can see who said what | Implemented in source and preview | Render the attribution already carried by each transcript turn |
+| 1b | The reader can correct who said what | Implemented, tested, and packaged in Preview; rendered save-and-regenerate journey pending | Never hide uncertainty or overwrite the source transcript |
+| 2 | Names and jargon stay correct across meetings | Review controls, bounded storage, and provenance-safe note application are implemented, tested, and packaged in Preview | Vocabulary remains local, visible, editable, and bounded |
+| 3 | The reader can tell whether the audio caused a bad transcript | Quality guidance, bounded device context, retained-audio playback, and source-bound retry comparison and decisions are implemented, tested, packaged in Preview, and rendered with exact fixtures; generated-note invalidation and production-package gates remain | Quality evidence stays distinct from capture-integrity evidence |
+| 4 | Every recoverable problem leads to its exact repair | Existing recovery controls and the current stable reopen errors route to the selected meeting or Meetings; warnings without a real destination remain future work | Recovery actions must not imply that a failed operation succeeded |
+| 5 | The reader can find source passages across past meetings | Decision closed: keep semantic source finding out of the shipped interface until retrieval evidence establishes usefulness | Search remains local, source-linked, and unavailable during capture |
+
+## Delivery plan
+
+The roadmap ships as dependent wedges, not as one large branch. The first wave
+finishes the correction foundation while starting two independent foundations.
+Later waves wire those foundations into the product only after their contracts
+survive combined review.
+
+```text
+verified baseline
+├── A. corrected transcript -> note generation
+├── B. local vocabulary domain and storage contract
+└── C. exact recovery presentation for current meeting warnings
+        │
+        └── combined integration and packaged preview gate
+                ├── D. vocabulary controls and transcript application
+                ├── E. capture-quality evidence and transcription retry
+                └── F. narrow cross-meeting source finding decision
+```
+
+### Wave 1 — completed in parallel
+
+| Packet | Outcome | Owned files | Must not do | Merge gate |
+|---|---|---|---|---|
+| A — corrected note input | Note generation consumes an immutable corrected transcript projection while source locators continue to resolve against the retained transcript | Desktop Rust correction and note-operation path | Do not rewrite the retained transcript or change the browser UI | Tests prove corrected names reach generation, source digest remains pinned, and no-correction behavior is unchanged |
+| B — local vocabulary core | A bounded local domain model can add, edit, disable, delete, and deterministically project exact replacements | New session-core vocabulary module and its `lib.rs` export | Do not add UI, Tauri commands, fuzzy matching, or mutate past transcript artifacts | Tests cover restart-safe serialization, exact scope, disabled entries, deletion, ordering, and size bounds |
+| C — exact recovery presentation | Existing warning and failure states map to one contextual next action without claiming success | Desktop UI view model, rendering, styles, and UI tests | Do not add backend commands, settings changes, or generic help routing | Tests cover action, unavailable-action, retrying, failure, and preservation of the last usable result |
+
+### Wave 1 merge order
+
+Packet B merges first because it changes only session-core. Packet A merges
+second because it completes the current speaker-correction slice. Packet C
+merges last because its copy must be checked against the combined backend
+states. The orchestrator resolves integration edits; workers do not edit outside
+their owned files to make another packet compile.
+
+After merge, the full Rust and UI suites must pass together. A separately
+identified Preview bundle must then prove this release journey: reopen a completed
+meeting, inspect the original speaker label, apply a correction in a disposable
+fixture, regenerate the note, follow a source link, return to Meetings, and
+reopen the same meeting. The installed production app remains untouched.
+
+### Wave 2 foundation — completed in parallel
+
+| Packet | Delivered foundation | Remaining product work |
+|---|---|---|
+| Vocabulary projection | Exact replacements travel as bounded original-source ranges. Changed-length prompt text maps evidence back to the retained transcript. The current store is re-attested before durable note replacement. | Dedicated controls and current-meeting application counts are now built. **Always correct this** remains a later shortcut into the same ledger. |
+| Recording-quality evidence | New capture receipts persist resolved microphone identity and a separate `capture-quality/1` block for silence, clipping, low input, and steady background energy. Legacy receipts report quality as unknown. | Reader-safe guidance, bounded device context, retained-audio playback, and versioned retry are now built. Exact-fixture review states are rendered; mutation and production-package gates remain. |
+| Withheld-turn recovery | A valid withheld row now exposes one source-bound restore action. The command, capability, build contract, and shell contract are synchronized. | Add the remaining exact destinations only after their owning controls exist. |
+
+### Wave 2 integration — built; exact-fixture state receipt recorded
+
+1. **Built and packaged in Preview:** expose local vocabulary through a small
+   dedicated sheet. Keep every entry visible, editable, disableable, and local.
+2. **Built and packaged in Preview:** show current-meeting application counts
+   through the same immutable projection already used by note generation.
+3. **Built and packaged in Preview:** create a retry only from reverified
+   retained audio and the current transcript. Store the candidate separately.
+   Never replace the active transcript during retry creation.
+4. **Built and packaged in Preview:** surface reader-safe recording-quality
+   guidance, compare the current and retry transcripts, and require an explicit
+   keep-or-promote choice. Promotion clears the stale note pointer but does not
+   regenerate a note automatically.
+5. **Built and packaged in Preview:** route the current stable reopen errors to
+   the selected meeting or Meetings. A failed playback attempt offers a refresh
+   that mints new single-use handles instead of leaving dead controls.
+6. Complete future additions to the exact-repair map only after their
+   destinations exist. A button that opens a placeholder does not count as
+   recovery.
+
+The remaining product work is now the note-changing journey and warnings whose
+destinations do not exist yet. The exact fixture renders retry review and both
+decisions, quality, device, and playback states. Speaker-correction save,
+regeneration, generated-note/source-link, invalidation of a note that actually
+exists, recovery-toast, and exact installed-production-package evidence remain
+open.
+
+### Wave 3 decision — closed, do not ship yet
+
+The local source-finder backend already exists. It uses bounded transcript
+windows, returns quoted passages with turn provenance, reports prepared-window
+coverage and near ties, mints opaque transcript handles after the worker round
+trip, and refuses semantic work during capture. The product shell deliberately
+keeps the command unregistered.
+
+The committed 200-meeting scale probe explains why. The best bounded unit found
+7 of 10 intended meetings and 3 of the 5 questions that exact search could not
+answer. Its own registered conclusion says that this decides the storage unit,
+not whether retrieval is useful. Human usefulness was explicitly unreachable
+from that synthetic corpus.
+
+Do not re-admit the command or build a global semantic-search surface from this
+evidence. Keep title search, per-meeting exact transcript search, and claim-level
+**Show source** as the shipped recognition paths. A later experiment must use
+disposable data, preserve quoted source passages and honest coverage, show near
+ties, abstain when evidence is missing, and remain unavailable during capture.
+Only then should the candidate journey be reconsidered.
+
+A focused independent review checked the committed probe, dormant command,
+shell exclusion, and current title, transcript, and claim-evidence routes. It
+reported zero material findings in this no-ship decision.
+
+### Drift controls
+
+- Every packet starts from the same verified commit in its own linked worktree
+- File ownership is exclusive during a wave; widening scope returns to the orchestrator
+- Shared contracts are changed once, at integration, rather than copied into each branch
+- Each worker reports its commit, changed files, tests, assumptions, and unresolved gates
+- The orchestrator reviews branch diffs and source, not completion claims
+- A packet may be merged only when its own tests pass and its assumptions match this roadmap
+- “Implemented,” “packaged,” “installed,” and “shipped” remain separate states
+- No worker signs, installs, uploads, deploys, or changes `/Applications/Yawn.app`
+
+## Current build receipt
+
+**Directly observed on 2026-08-16.** The separately identified Yawn Preview
+bundle rendered speaker labels beside transcript turns. Its **Back to Meetings**
+action returned to a Recent meetings list containing the completed preview
+meeting. No recording was started, and no meeting content was copied into this
+roadmap.
+
+**Verified in source.** Transcript rendering now displays the attribution
+already stored on a turn and uses **Unattributed** when no claim exists. A
+desktop regression test also proves that an active meeting is excluded from the
+library while its lease is held and enters the library when that lease ends.
+
+The correction increment now stores each speaker-name change as a separate,
+meeting-local operation bound to the transcript digest and original source
+speaker group. The latest operation changes only the rendered attribution. The
+retained transcript file remains byte-for-byte unchanged, earlier corrections
+remain in the local history, and choosing the source label restores the source
+projection.
+
+**Directly observed after the correction build.** The packaged Preview transcript
+rendered each speaker name as a correction control. Opening it showed the source
+label, the exact number of matching turns, the unchanged-source promise, and an
+explicit source-label recovery action. No correction was saved during this
+rendered inspection.
+
+**Wave 1 source and package receipt.** Three isolated worktrees started from the
+same baseline and merged through disjoint file ownership. The merge added the
+corrected-note input, the bounded local-vocabulary core, and contextual recovery
+presentation. Cross-review caught and removed unrelated formatting edits. It
+also added an incremental output bound before the vocabulary packet merged.
+
+The corrected-note path re-derives the active correction under the same meeting
+lease used for durable note replacement. The generator applies the validated
+speaker-label overlay only after reading and digest-checking the retained
+transcript. The generated note and its locators keep the original transcript
+digest. No correction keeps the former request shape.
+
+**Verification commands.** The session-core suite passed 428 unit tests, 17
+process-fault tests, and 8 doc tests. The desktop suite passed 131 tests, the
+shell contract passed 5, and the UI suite passed 22. The rebuilt packaged
+runtime passed 209 worker tests. `npm run preview-build` and
+`npm run preview-verify` produced and verified the separately identified
+`Yawn Preview.app` bundle.
+
+**Rendered verification boundary.** The earlier Preview observation above is
+still direct evidence for speaker controls and meeting continuity. The new
+bundle launched, but computer-use could not obtain an accessibility snapshot
+from that process. No real correction was saved and no private note was
+regenerated to manufacture a passing visual check. The source and package gates
+are green; the rendered save, regenerate, source-link, Back, and reopen journey
+remains a release gate.
+
+**Wave 2 source and package receipt.** Vocabulary replacements are now stored
+in durable note-generation requests as bounded source ranges. The note child
+checks the retained transcript and each source-span digest before model use.
+It changes only model-facing excerpts; generated-note provenance and locators
+continue to name the original transcript. Empty vocabulary keeps the former
+wire shape.
+
+New captures now persist resolved microphone identity and a separate versioned
+quality block. Capture integrity remains the existing pass/fail floor; silence,
+clipping, low input, and steady background energy are guidance evidence and do
+not change that verdict. Rust recovery accepts the two named optional receipt
+fields while continuing to reject unrelated fields and changed audio.
+
+A withheld transcript row now exposes **Restore this turn** only when the
+current meeting, transcript digest, source row, and idle capture state agree.
+The backend repeats those checks and refreshes the meeting only after the
+existing immutable restoration operation succeeds.
+
+The combined session-core suite passed 429 unit tests, 17 process-fault tests,
+and 8 doc tests. The desktop suite passed 132 tests, the shell contract passed
+5, and the UI suite passed 23. The rebuilt runtime passed 217 worker tests.
+The refreshed Preview bundle built and passed bundle verification. The installed
+production app remains unchanged.
+
+**Wave 2 integration receipt.** The meeting review now has a dedicated local
+vocabulary sheet. It lists every exact Before → After row, its enabled state,
+and its application count in the current non-withheld transcript. Add, edit,
+enable, disable, and two-step delete actions are source-digest-bound and run
+under the meeting lease. They do not rewrite the visible transcript or trigger
+note generation. Future note regenerations use the saved local projection.
+
+The retry foundation now accepts only the current retained transcript, capture
+session, microphone audio, and system audio digests. The worker rechecks those
+artifacts before and after creating an immutable candidate. Session-core checks
+the same five-part binding under the meeting lease, stores the candidate beside
+the source, and leaves the active transcript and note unchanged. A later
+explicit promotion changes the transcript pointer and clears the stale note
+pointer while preserving all prior files.
+
+The merged session-core suite passed 441 unit tests, 17 process-fault tests, and
+8 doc tests. The desktop suite passed 133 tests, the shell contract passed 5,
+and the UI suite passed 24. The worker suite passed 222 tests with 10 platform
+skips. One long note-budget case first hit its 240-second deadline while Rust
+and Python suites ran concurrently; it passed alone in 191 seconds, and the
+full worker suite then passed alone in 188 seconds. The internal worker runtime
+rebuilt and verified. `Yawn Preview.app` rebuilt and passed bundle verification.
+The installed production app remains unchanged.
+
+**Wave 2 product-integration receipt.** Meeting review now exposes the retry as
+a separate action after the generated note and before the full transcript. The
+comparison sheet shows the current and candidate transcripts side by side on a
+wide window and stacked on a narrow one. Withheld rows remain withheld. It also
+shows a closed set of product-authored recording-quality observations; raw
+metrics, device names, paths, audio digests, and receipt text do not cross into
+the web view.
+
+Retry creation is bound to the current transcript, capture session,
+microphone audio, and system audio. The worker rereads and hashes all retained
+sources before and after transcription, then the desktop rereads the immutable
+candidate by its content address. Creation does not change the active
+transcript or note. Only **Use retry** changes the transcript pointer. That
+decision clears the stale note pointer, preserves every prior file, and leaves
+note regeneration as a separate reader action. **Keep current** records the
+decision without changing the meeting. Closing the sheet records nothing.
+
+Pending comparisons survive restart through the same session-core authority
+that owns retry decisions. Discovery is bounded and fails closed on multiple,
+stale, released, corrupt, cross-meeting, or malformed candidates. The desktop
+handler, capabilities, permission schemas, and shell contract expose the same
+three commands.
+
+Meeting review now projects recording-device context as `identified` or
+`unknown`. The web view receives neither the microphone name nor its index or
+host API. The identified state says only that an identity was recorded. The
+unknown state offers **Check audio input** without claiming which device was
+used.
+
+Retained microphone and system audio now have separate **Play** controls. Each
+control spends one opaque, source-specific handle. Native code rechecks and
+opens the private artifact, passes that open file to fixed `/usr/bin/afplay`
+through standard input, and owns the child until it completes or is stopped.
+No recording path, bytes, digest, or generic file or shell authority crosses
+into the web view. While that child is active, scheduled retention defers its
+storage pass. The next pass may release due audio only after the child has been
+stopped or reaped.
+
+Failed playback and the current stable reopen errors now offer a refresh for
+the selected meeting. That refresh reloads Meetings, falls back to the home
+view if the meeting disappeared, and otherwise mints fresh single-use handles.
+The build command list, handler, capability, generated permissions, and shell
+contract now expose the same speaker-correction and playback commands.
+
+The combined session-core suite passed 456 unit tests. Its 17 process-fault and
+8 doc tests were unchanged from the prior combined gate. The desktop suite
+passed 142 tests, the shell contract passed 6, the build matrix passed 5, and
+the UI suite passed 37. The worker suite passed 222 tests with 10 platform
+skips. The internal worker runtime rebuilt and verified. `Yawn Preview.app`
+rebuilt and passed bundle verification.
+
+Independent read-only review first found a missing speaker-correction command in
+the build manifest, spent playback handles without a recovery action, three
+unmapped stable reopen errors, unsafe use of file descriptor 3, and scheduled
+retention that could release audio while the owned player still held it. The
+fixes synchronized the command contract, completed the exact map for current
+stable reopen errors,
+moved playback to inherited standard input, and made active playback defer the
+retention pass without touching storage. A second focused review reported zero
+material findings in that scope. Those reviews inspected source and assertions;
+the executable test evidence above comes from the build session.
+
+**Rendered Preview receipt — 2026-08-17.** The first running Preview process
+predated the rebuilt bundle, so it was not accepted as release evidence. After
+confirming that it had no capture artifact open, Computer Use closed it and
+launched the exact packaged `Yawn Preview.app` by its full path. The fresh
+process completed its local-engine check and rendered the transcript-ready
+state.
+
+The live walk observed Recent meetings, title search, reopening a retained
+meeting from Meetings, **Generate note**, progressive **Full transcript**
+disclosure, separate **Play microphone** and **Play system audio** controls,
+the separate personal-notes area, and **Back to meetings** continuity. Settings
+rendered on-device storage, speech and note model controls, and separate
+microphone and system-audio access controls. The walk returned to Meetings
+without changing any setting.
+
+The retry comparison, quality and device messages, playback state and Stop,
+recovery actions, speaker-correction save and regeneration, decide-later close,
+keep, promote, and post-promotion note state still lack rendered evidence. No
+real meeting audio was played, no private content was reproduced, no field was
+edited, and no permission was accepted to manufacture a passing check.
+
+**Rendered fixture receipt — 2026-08-17.** The exact signed `Yawn Fixture.app`
+with bundle id `com.ninochavez.local-meeting-notes.fixture` ran against the
+exact marker-bound root
+`/Users/nino/Library/Application Support/com.ninochavez.local-meeting-notes.fixture`.
+The fixture contained only deterministic invented content and two 8-second
+silent WAVs. A verified public speech-model copy cleared startup. This is
+fixture evidence, not a release claim.
+
+The direct Computer Use walk observed Recent meetings, title search, opening
+the meeting detail, **No meeting note yet**, **Generate note** progressive
+**Full transcript**, separate personal notes, and a retry review. The retry
+modal showed current versus candidate transcript, silence and low-input
+caution, no material clipping issue, unavailable background-noise evidence,
+and a bounded device-identity disclaimer with no raw device name. **Decide
+later** closed without mutation and preserved **Review retry**. Microphone
+playback showed active state and **Stop**; explicit Stop returned **No recording
+is playing**. **Back** returned to the same Recent meetings list.
+
+At that point, the walk had not observed **Keep current**, **Use retry** or
+promotion, speaker-correction save, regeneration, generated-note/source-link
+and post-promotion state, recovery-toast journeys, or the exact installed
+production package. No Settings change, permission change, recording, private
+content, or real meeting audio was used.
+
+**Fresh-state fixture support.** A marker-bound archive command now moves the
+exact synthetic fixture to a recoverable same-parent archive under the canonical
+writer lock. It uses an exclusive atomic rename, refuses existing destinations,
+and never deletes or automatically reseeds data. Separate fresh roots were used
+for the **Keep current** and **Use retry** rendered walks.
+
+**Rendered fixture mutation receipt — 2026-08-17.** **Keep current** closed the
+comparison, reported that the retained transcript was kept, replaced **Review
+retry** with **Retry transcript**, and preserved that state across Back and
+reopen. On a second fresh root, **Use retry** promoted the candidate and returned
+to transcript-only detail with **Generate note** and **Retry transcript**.
+
+The promoted fixture had no generated note, so this walk did not prove clearing
+an existing note. It exposed a copy defect instead: the success toast claimed a
+previous note was cleared even though none existed. Promotion continuity across
+Back and reopen also remains to be observed after that copy is fixed. The three
+synthetic states are preserved as recoverable fixture roots; no private content,
+real audio, Settings change, permission change, or recording was involved.
+
+**Retry-promotion copy correction — source-verified, 2026-08-17.** The success
+toast no longer claims a clearing event. It now reads `The retry transcript is
+now current. Generate a new note when you're ready.` in every case. The command
+is handed one settled outcome and no note fact, and a replayed promotion clears
+nothing because the pointer already moved, so conditional copy would have been
+guessing rather than reporting. The mapping was extracted into a pure function
+with exact-copy coverage for all three outcomes.
+
+Promotion's own note invalidation was untested until now — every retry fixture
+started with `current_note: None`, including the one behind the earlier rendered
+walk. A new session-core test gives the meeting a real two-file note revision,
+promotes, and proves the pointer is cleared, the lifecycle returns to
+`TranscriptReady`, and the note bytes survive on disk. Removing the clearing
+line makes that test fail, so the pre-decision modal warning is now evidenced
+rather than assumed.
+
+**Rendered confirmation — 2026-08-17.** On a freshly seeded root, Computer Use
+directly observed the corrected toast reading exactly `The retry transcript is
+now current. Generate a new note when you're ready.` on a meeting whose note
+card said **No meeting note yet.** Promotion continuity then held across **Back
+to meetings** and reopen: the promoted title persisted, the note stayed absent,
+and the control read **Retry transcript** rather than **Review retry**. The
+library list refreshed to the promoted title, so the decision command still
+invalidates the preview library.
+
+**Modal warning defect found by that walk — fixed, 2026-08-17.** The same
+journey exposed a second instance of the defect. The pre-decision modal stated
+`Using this retry clears the current generated note.` on a meeting that had no
+note, asserting an object that did not exist. The earlier source reading had
+recorded this warning as correct; the rendered walk is what falsified that.
+
+The warning now renders only when a note exists, gated on the same
+`transcript-only` signal the note card reads, compared strictly so an unknown or
+still-loading note state keeps the warning. Suppression was chosen over new
+copy: with no note there is nothing to warn about, and the detail view already
+offers **Generate note**. Computer Use confirmed the modal now shows the
+comparison and the three decisions with no warning bar.
+
+The note-existed direction of that warning is not rendered evidence. It rests on
+the strict-equality guard and a mechanical assertion in the UI suite, because no
+synthetic note fixture exists yet. Clearing an existing note likewise remains
+proven in source and not yet rendered.
+
+**Developer ID-signed local-bundle receipt — 2026-08-17.** The unreleased source
+build at `target/release/bundle/macos/Yawn.app`, built from app source commit
+`97ff8c9`, passed the `internal-alpha` admission check. The bounded local lane
+then signed 169 Mach-O files with Developer ID and hardened runtime, rebuilt the
+runtime manifest from those signed bytes, signed the outer bundle, and passed
+strict signed-bundle verification. The verifier confirmed identifier
+`com.ninochavez.local-meeting-notes`, Team `34VZ63G58M`, and the hardened-runtime
+flag. The signed outer bundle's CDHash is
+`5b878972e00a7a42657fda2abf06076f00b388eb`.
+
+This is signed local evidence, not a release. The lane did not check a notary
+profile, submit to Apple for notarization, staple, build a DMG, run Gatekeeper,
+install, or replace an app. The recorded before/after comparison found the
+existing DMG and checksum unchanged by inode, size, and modification time. It
+found the same for the installed `/Applications/Yawn.app` binary. Developer ID
+signing still uses Apple's secure timestamp service, so “local” does not mean
+offline.
+
+**Remaining release gate.** The base completed-meeting reopen and Back journey
+now passes in the separately identified Preview package. The Developer
+ID-signed local bundle remains unnotarized and uninstalled. The remaining
+stateful journeys above require a further disposable fixture or explicit human
+review, followed by the same walk against the exact installed production
+package, before these changes can be called shipped.
+
+**Remaining slice 1b gate.** Source acceptance is complete: note generation uses
+the corrected attribution while source links stay bound to the retained
+transcript. Shipping still requires the non-destructive packaged journey above
+to be completed with a disposable fixture or explicit human review.
+
+## 1. Show and correct who said what
+
+**Outcome.** The visible transcript names each known speaker. A reader can fix a
+wrong or missing label once and apply the correction to every matching turn.
+
+**Why this is first.** A useful summary can still assign a commitment to the
+wrong person. Speaker uncertainty also made the earlier in-person 630 meeting
+hard to review. Fixing attribution improves the transcript, the note, and every
+future search result.
+
+**Existing foundation.** Transcript turns carry an optional `speaker` value.
+The copied and rendered transcript now expose it, and the visible label opens
+the meeting-local correction control.
+
+**Build sequence.** Slice 1a renders the existing attribution without changing
+stored data. Slice 1b adds a durable correction operation, a corrected
+projection, and note regeneration from that projection. The visible label must
+land first so the correction control has an honest object to edit.
+
+**Current state.** The durable correction operation, corrected transcript
+projection, exact-group UI, reopen behavior, source-label recovery, and note
+regeneration from the corrected projection are built and packaged in Preview.
+The rendered save-and-regenerate release journey remains unverified.
+
+**Scope.**
+
+- Render `Me`, `Them`, named speakers, and `Unattributed` explicitly
+- Let the reader rename one speaker and apply that name across the transcript
+- Preserve the original attribution and store the correction as a separate,
+  reviewable operation
+- Regenerate the note from the corrected transcript projection
+- Keep uncertain attribution visibly uncertain
+
+**Done when.**
+
+- A rendered transcript shows the same speaker information as its copied form
+- One correction updates every intended turn and no unrelated turn
+- Reopening the meeting preserves both the correction and the original source
+- A regenerated note uses the corrected attribution and retains source links
+- Tests cover named, unnamed, withheld, and incorrectly grouped turns
+
+**Not in this slice.** General-purpose room diarization. Yawn currently requires
+the operator to attest that they are the only person near the microphone. A
+multi-person in-room mode needs a separate capture, consent, and evidence
+decision before the product can claim it works.
+
+## 2. Keep a local vocabulary of names and jargon
+
+**Outcome.** The reader can teach Yawn the names, organizations, products,
+acronyms, and preferred spellings that matter in their meetings.
+
+**Scope.**
+
+- Add, edit, disable, and delete vocabulary entries on this Mac
+- Support direct replacements such as a mistaken spelling to the intended one
+- Offer **Always correct this** after an explicit transcript correction
+- Apply vocabulary through a deterministic corrected projection; never rewrite
+  the retained source artifact silently
+- Show where an entry was applied and allow the reader to undo it
+- Warn when the vocabulary becomes large enough to increase overcorrection risk
+
+**Done when.**
+
+- A saved entry survives restart and affects the next eligible transcript
+- The original transcript remains recoverable and byte-identical
+- A correction cannot change text outside its declared match
+- Removing an entry does not rewrite past source artifacts
+- Note regeneration uses the current corrected projection and preserves evidence
+
+**Boundary decision.** Vocabulary lives in a dedicated meeting-review sheet.
+It does not widen Settings beyond audio access and model storage.
+
+## 3. Explain recording quality and allow a safe retry
+
+**Outcome.** When a transcript looks wrong, the reader can inspect verified
+quality evidence, confirm whether a microphone identity was recorded, listen to
+retained audio, and compare a source-bound retry before blaming the speech or
+note model. A recorded identity does not prove that it was the intended input.
+
+**Current state.** Capture persists integrity evidence, resolved microphone
+identity, and a separate quality block. Meeting review exposes only verified,
+product-authored quality guidance. The retry comparison, explicit keep or
+promote decisions, retained-audio playback, and bounded device explanation are
+built and packaged in Preview. The exact fixture renders review, quality,
+device, playback, Keep-current, and Promote-retry states. Clearing a generated
+note that actually exists is proven in source but not yet rendered; note
+regeneration and exact installed-production-package verification remain open.
+
+**Scope.**
+
+- Say whether a microphone identity was recorded without exposing its name,
+  index, or host API, and link an unknown state to **Check audio input**
+- Surface silence, clipping, low input, and material background noise
+  as separate observations
+- Let the reader play retained audio while the retention period allows it
+- Retry transcription from the unchanged recording
+- Compare the retry with the current transcript before replacing the active
+  projection
+- Keep every retry versioned and source-bound
+
+**Done when.**
+
+- Each quality message names the observed condition and the next useful action
+- Integrity evidence and quality guidance remain separate fields and labels
+- Retrying transcription cannot alter or delete the recording
+- The reader can keep the current transcript when the retry is worse
+- If retained audio is gone, the interface says that the meeting cannot be
+  retranscribed
+
+## 4. Route each problem to its exact repair
+
+**Outcome.** A warning or failed state ends with one action that opens the place
+where the reader can fix it.
+
+Examples:
+
+- Recording device not verified → open audio access guidance
+- Misspelled name → open the local vocabulary
+- Wrong speaker → open speaker correction for that turn
+- Incomplete transcript → listen to retained audio and retry transcription
+- Weak generated note → regenerate without discarding the current note first
+
+This is an in-app routing contract, not an email campaign. A generic help page
+does not satisfy the outcome when Yawn already knows the failing meeting and
+operation.
+
+**Current state.** Note retry, Meetings, withheld-turn restoration, local
+vocabulary, speaker correction, transcript retry, failed playback, and the
+current stable reopen errors have real destinations. Future warnings remain
+blocked until their owning controls exist.
+
+**Done when.** Every recoverable warning has one primary action, lands at the
+correct meeting or control, and preserves the failed artifact until the repair
+succeeds.
+
+## 5. Find source passages across meetings
+
+**Outcome.** The reader can ask a narrow question such as “Where did we discuss
+the launch date?” and receive quoted passages linked to the meetings that contain
+them.
+
+**Existing foundation.** A local corpus-question command, bounded vector store,
+quoted-passage response, coverage report, and source-handle path already exist
+in the desktop backend. The command is deliberately not registered in the
+shipped interface.
+
+**Decision.** Do not ship the semantic source finder yet. The committed scale
+probe selected 128-word windows as the least costly valid storage unit, but its
+best arm retrieved 7 of 10 intended meetings and only 3 of the 5 questions that
+exact search could not answer. That probe explicitly did not establish human
+usefulness. The shell contract continues to keep the command out of the product.
+
+If a later disposable-fixture experiment supplies stronger evidence, the
+candidate journey is Meetings → **Find something I remember** → quoted result
+cards → the existing meeting detail anchored at the source turn. It must reuse
+the existing transcript reader rather than create a second answer or chat
+surface.
+
+**Required boundaries.**
+
+- Search and answer generation stay on this Mac
+- Every answer quotes and links to retained source passages
+- Coverage gaps are stated instead of hidden
+- Search remains unavailable during capture when it would compete with the
+  transcription worker
+- No email, calendar, Slack, or web context is added through this slice
+
+**Not yet.** Global semantic source finding and live “What did I miss?”
+summaries. The current evidence does not establish the first as useful. The
+worker boundary also makes capture the priority, and a live summary would add an
+uncapped interpretation path while the source is still being recorded.
+
+## Ideas this roadmap does not adopt
+
+The Wispr Flow emails also promoted writing styles, reusable dictation snippets,
+spoken list formatting, automatic call detection, connected services, and AI
+tool integrations. Those ideas solve different jobs or cross Yawn's current
+privacy and consent boundaries.
+
+They stay out unless a later product decision supplies a Yawn-specific user
+need, a local authority model, and evidence that the added complexity improves
+the private meeting-note job.
+
+## Invariants across every slice
+
+- Original recordings and transcripts are never silently rewritten
+- Corrected and generated material remains distinguishable from source evidence
+- A failed retry never replaces the last usable result
+- Capture, transcription, corrections, vocabulary, and notes remain local
+- Recording still begins through an explicit consent and start action
+- UI copy states what happened, what is uncertain, and what the reader can do
+- A feature is not marked shipped until it is rendered and verified in the
+  packaged desktop app
+
+## Evidence behind the direction
+
+Two Wispr Flow emails received on 2026-08-08 and 2026-08-10 introduced the
+comparison. Their useful product ideas were checked against the linked public
+material and Yawn's current source. Private email contents are not copied into
+this repository.
+
+- [Why transcription quality fluctuates](https://wisprflow.ai/post/transcription-quality)
+  describes microphone changes, background noise, input volume, audio review,
+  transcription retry, transcript feedback, and dictionary overcorrection.
+- [Wispr Flow Notetaker](https://wisprflow.ai/notetaker) presents named speakers,
+  one-step relabeling, topic-organized summaries, source-linked questions, and
+  live catch-up as its product direction.
+- [Yawn's product brief](product-brief.md) owns the local storage, consent,
+  evidence, note, and interface boundaries this roadmap preserves.
+- The current desktop sources own the implementation facts:
+  [`main.js`](../apps/desktop/ui/main.js),
+  [`view-model.mjs`](../apps/desktop/ui/view-model.mjs),
+  [`main.rs`](../apps/desktop/src-tauri/src/main.rs), and
+  [`capture_health.py`](../apps/desktop/runtime/spike/capture_health.py).
+
+External URLs were resolved and checked against the cited claims on 2026-08-16.

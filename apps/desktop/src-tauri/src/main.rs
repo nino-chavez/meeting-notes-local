@@ -8,9 +8,10 @@ mod library_reader;
 
 // The correction/regeneration facade is intentionally compiled but not wired
 // into the current internal-alpha command set.
+mod manual_delete_facade;
 #[allow(dead_code)]
 mod product_facade;
-mod manual_delete_facade;
+mod speaker_correction;
 // First run's permission surface (§ H). Runs the manifest-verified permission
 // probe and parses its output as untrusted input; holds no storage authority and
 // reads no operator content.
@@ -56,18 +57,20 @@ use local_meeting_notes_session_core::meeting::resolve_artifact;
 use local_meeting_notes_session_core::meeting::{
     ArtifactRef, AudioRetention, AudioRetentionRule, AudioState, MeetingArtifacts,
     MeetingLifecycle, MeetingRecord, MeetingSchema, artifact_ref, load_meeting, read_private_bytes,
-    retention_policy_sha256, write_meeting,
+    retention_policy_sha256, verify_record_artifacts, write_meeting,
 };
 use local_meeting_notes_session_core::meeting_coordination::MeetingStorageCoordination;
-use local_meeting_notes_session_core::note_projection::{NoteProjector, UnavailableProjector};
-use local_meeting_notes_session_core::note_projector_process::{
-    GENERATE_MANIFEST_FILE, PROJECT_MANIFEST_FILE, admit_note_projector,
-};
+use local_meeting_notes_session_core::meeting_deletion::reconcile_pending_meeting_deletions;
 use local_meeting_notes_session_core::model_store::{
     InstalledTranscriptModel, ModelCatalog, TranscriptModel, activate_model, active_model,
     active_note_model, deactivate_note_model, installed_model, model_is_stored,
     note_model_is_stored, remove_inactive_model, remove_inactive_note_model,
 };
+use local_meeting_notes_session_core::note_projection::{NoteProjector, UnavailableProjector};
+use local_meeting_notes_session_core::note_projector_process::{
+    GENERATE_MANIFEST_FILE, PROJECT_MANIFEST_FILE, admit_note_projector,
+};
+use local_meeting_notes_session_core::operations::TranscriptRetryUiArgs;
 #[cfg(target_os = "macos")]
 use local_meeting_notes_session_core::profile_lifecycle::ProfileLifecycleError;
 use local_meeting_notes_session_core::protocol::{
@@ -76,14 +79,12 @@ use local_meeting_notes_session_core::protocol::{
 use local_meeting_notes_session_core::recovery::{
     RecoveryCode, RecoveryDisposition, scan_and_recover,
 };
-use local_meeting_notes_session_core::meeting_deletion::reconcile_pending_meeting_deletions;
 use local_meeting_notes_session_core::reducer::{
     CaptureState, ExclusiveOperation, Reducer, StartupState,
 };
 use local_meeting_notes_session_core::retention::{
     AppDataWriterLock, RetentionOutcome, execute_due_retention_excluding, meeting_dir,
 };
-use local_meeting_notes_session_core::transcript_deletion::reconcile_pending_transcript_deletions;
 #[cfg(target_os = "macos")]
 use local_meeting_notes_session_core::retention::{
     ProfileEnrollmentAdmissionError, ProfileEnrollmentCompletion, ProfileEnrollmentWorker,
@@ -99,7 +100,12 @@ use local_meeting_notes_session_core::supervision::{
     ProcessInspector, SupervisionError, SystemGroupSignaler, SystemProcessInspector,
     internal_alpha_operations,
 };
+use local_meeting_notes_session_core::transcript_deletion::reconcile_pending_transcript_deletions;
 use local_meeting_notes_session_core::transcript_restoration::resolve_stored_transcript_primed;
+use local_meeting_notes_session_core::transcript_retry::TranscriptRetryOutcome;
+use local_meeting_notes_session_core::transcription_queue::{
+    TranscriptionQueue, TranscriptionRequest,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -121,6 +127,11 @@ const WORKER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSCRIPT_REQUEST_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const PARTICIPANT_NOTICE_VERSION: &str = "internal-transcript-alpha/1";
 const SETTINGS_WINDOW_LABEL: &str = "settings";
+const RETAINED_AUDIO_PLAYER: &str = "/usr/bin/afplay";
+/// `afplay` opens this fixed standard-input alias. The player never receives a
+/// meeting path, and Rust owns the standard-descriptor setup without a custom
+/// low-numbered descriptor that could conflict with its exec-error plumbing.
+const RETAINED_AUDIO_STDIN: &str = "/dev/stdin";
 #[cfg(feature = "preview-surface")]
 const ACTIVE_WINDOW_LABEL: &str = "preview";
 #[cfg(not(feature = "preview-surface"))]
@@ -154,7 +165,9 @@ fn show_settings_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 
 #[tauri::command]
 fn open_settings_window(app: AppHandle) -> Result<(), String> {
-    show_settings_window(&app).map(|_| ()).map_err(|error| error.to_string())
+    show_settings_window(&app)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 struct ApplicationState {
@@ -165,6 +178,8 @@ struct ApplicationState {
     storage: Arc<Mutex<Option<StorageContext>>>,
     runtime: Mutex<Option<RuntimeIdentity>>,
     worker: Arc<Mutex<Option<OwnedChild>>>,
+    transcription_worker: Arc<Mutex<Option<OwnedChild>>>,
+    transcription_executor: Mutex<Option<TranscriptionExecutorControl>>,
     capture_task: Mutex<Option<CaptureTaskControl>>,
     sitting_task: Mutex<Option<SittingTaskControl>>,
     command_lock: Mutex<()>,
@@ -180,6 +195,10 @@ struct ApplicationState {
     note_model_install_active: AtomicBool,
     note_model_setup: Mutex<NoteModelSetup>,
     preview_library: Mutex<Option<library_reader::LibraryReader>>,
+    /// The one audio child the shell owns. This is deliberately a `Child`,
+    /// never a PID: every stop and reap action is constrained to this exact
+    /// process object rather than a reused system process identifier.
+    audio_playback: Mutex<Option<RetainedAudioPlayback>>,
     preview_profile: Mutex<PreviewProfileSnapshot>,
     preview_enrollment: Mutex<PreviewEnrollmentSurface>,
     // Successful note-projector admission, cached off the hot library-rebuild
@@ -196,6 +215,8 @@ impl Default for ApplicationState {
             storage: Arc::new(Mutex::new(None)),
             runtime: Mutex::new(None),
             worker: Arc::new(Mutex::new(None)),
+            transcription_worker: Arc::new(Mutex::new(None)),
+            transcription_executor: Mutex::new(None),
             capture_task: Mutex::new(None),
             sitting_task: Mutex::new(None),
             command_lock: Mutex::new(()),
@@ -209,11 +230,151 @@ impl Default for ApplicationState {
                 ..NoteModelSetup::default()
             }),
             preview_library: Mutex::new(None),
+            audio_playback: Mutex::new(None),
             preview_profile: Mutex::new(PreviewProfileSnapshot::unavailable()),
             preview_enrollment: Mutex::new(PreviewEnrollmentSurface::unavailable()),
             note_projector: Mutex::new(None),
         }
     }
+}
+
+impl Drop for ApplicationState {
+    fn drop(&mut self) {
+        if let Ok(mut slot) = self.transcription_worker.lock() {
+            if let Some(mut worker) = slot.take() {
+                let _ = worker.stop_and_wait(Duration::from_millis(750));
+            }
+        }
+        if let Ok(mut slot) = self.worker.lock() {
+            if let Some(mut worker) = slot.take() {
+                let _ = worker.stop_and_wait(Duration::from_millis(750));
+            }
+        }
+        if let Ok(slot) = self.transcription_executor.get_mut() {
+            if let Some(control) = slot.take() {
+                control.stop.store(true, Ordering::SeqCst);
+                let _ = control.handle.join();
+            }
+        }
+        // App teardown owns the same child slot as explicit Stop. No PID is
+        // retained or signalled after this state goes away.
+        if let Ok(slot) = self.audio_playback.get_mut() {
+            if let Some(mut playback) = slot.take() {
+                playback.stop_and_reap();
+            }
+        }
+    }
+}
+
+/// A fixed native player attached to one already-open, verified retained-audio
+/// file. The child receives that file as standard input and opens only the
+/// fixed `/dev/stdin` alias, which keeps the file authority out of the webview
+/// and prevents `afplay` from reopening storage.
+struct RetainedAudioPlayback {
+    child: Child,
+    source: library_reader::RetainedAudioSource,
+}
+
+impl RetainedAudioPlayback {
+    fn spawn(grant: library_reader::LibraryAudioPlaybackGrant) -> io::Result<Self> {
+        // `Stdio` performs the canonical child setup at descriptor zero. It
+        // avoids reserving a low descriptor ourselves, which could collide
+        // with Rust's private exec-error pipe on macOS.
+        let input = grant.file().try_clone()?;
+        let mut command = Command::new(RETAINED_AUDIO_PLAYER);
+        command
+            .arg(RETAINED_AUDIO_STDIN)
+            .stdin(Stdio::from(input))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = command.spawn()?;
+        Ok(Self {
+            child,
+            source: grant.source(),
+        })
+    }
+
+    fn source_name(&self) -> &'static str {
+        match self.source {
+            library_reader::RetainedAudioSource::Microphone => "microphone",
+            library_reader::RetainedAudioSource::System => "system",
+        }
+    }
+
+    fn poll(&mut self) -> io::Result<bool> {
+        self.child.try_wait().map(|status| status.is_none())
+    }
+
+    fn stop_and_reap(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetainedAudioPlaybackResponse {
+    state: &'static str,
+    source: Option<&'static str>,
+    message: &'static str,
+}
+
+fn audio_playback_response(
+    state: &'static str,
+    source: Option<&'static str>,
+    message: &'static str,
+) -> RetainedAudioPlaybackResponse {
+    RetainedAudioPlaybackResponse {
+        state,
+        source,
+        message,
+    }
+}
+
+/// Stops and reaps only the process object held by Yawn. A failed kill can
+/// mean the child has just exited; `wait` is still attempted to collect it.
+fn stop_owned_audio_playback(state: &ApplicationState) {
+    let Ok(mut slot) = state.audio_playback.lock() else {
+        return;
+    };
+    if let Some(mut playback) = slot.take() {
+        playback.stop_and_reap();
+    }
+}
+
+fn owned_audio_playback_status(state: &ApplicationState) -> RetainedAudioPlaybackResponse {
+    let Ok(mut slot) = state.audio_playback.lock() else {
+        return audio_playback_response(
+            "unavailable",
+            None,
+            "Retained audio is unavailable. Reopen Library and try again.",
+        );
+    };
+    let Some(playback) = slot.as_mut() else {
+        return audio_playback_response("idle", None, "No recording is playing.");
+    };
+    match playback.poll() {
+        Ok(true) => {
+            return audio_playback_response(
+                "playing",
+                Some(playback.source_name()),
+                "Playing retained audio.",
+            );
+        }
+        Err(_) => {
+            if let Some(mut playback) = slot.take() {
+                playback.stop_and_reap();
+            }
+            return audio_playback_response(
+                "unavailable",
+                None,
+                "Retained audio is unavailable. Reopen Library and try again.",
+            );
+        }
+        Ok(false) => {}
+    }
+    slot.take();
+    audio_playback_response("completed", None, "The recording finished.")
 }
 
 struct AppModel {
@@ -226,6 +387,8 @@ struct AppModel {
     started_at_epoch_seconds: Option<u64>,
     capture_state_started_at_epoch_seconds: Option<u64>,
     transcription_last_worker_heartbeat_at_epoch_seconds: Option<u64>,
+    background_transcription_active: bool,
+    background_transcription_queued_count: usize,
     degraded: bool,
     mic_state: Option<String>,
     system_state: Option<String>,
@@ -253,6 +416,8 @@ impl Default for AppModel {
             started_at_epoch_seconds: None,
             capture_state_started_at_epoch_seconds: None,
             transcription_last_worker_heartbeat_at_epoch_seconds: None,
+            background_transcription_active: false,
+            background_transcription_queued_count: 0,
             degraded: false,
             mic_state: None,
             system_state: None,
@@ -278,6 +443,8 @@ impl AppModel {
             capture_state_started_at_epoch_seconds: self.capture_state_started_at_epoch_seconds,
             transcription_last_worker_heartbeat_at_epoch_seconds: self
                 .transcription_last_worker_heartbeat_at_epoch_seconds,
+            background_transcription_active: self.background_transcription_active,
+            background_transcription_queued_count: self.background_transcription_queued_count,
             degraded: self.degraded,
             mic_state: self.mic_state.clone(),
             system_state: self.system_state.clone(),
@@ -315,6 +482,8 @@ struct AppSnapshot {
     started_at_epoch_seconds: Option<u64>,
     capture_state_started_at_epoch_seconds: Option<u64>,
     transcription_last_worker_heartbeat_at_epoch_seconds: Option<u64>,
+    background_transcription_active: bool,
+    background_transcription_queued_count: usize,
     degraded: bool,
     mic_state: Option<String>,
     system_state: Option<String>,
@@ -441,7 +610,11 @@ impl From<&TranscriptModel> for ModelSetupOption {
 struct TranscriptTurn {
     #[serde(rename = "sourceTurnIndex")]
     source_turn_index: u32,
+    #[serde(rename = "sourceSpeaker")]
+    source_speaker: Option<String>,
     speaker: Option<String>,
+    #[serde(rename = "speakerCorrected")]
+    speaker_corrected: bool,
     start: f64,
     text: String,
     // Withheld rows are positional only: the gate's decision is visible, the
@@ -454,6 +627,39 @@ struct RestoredTranscriptProjection {
     turns: Vec<TranscriptTurn>,
     current_transcript_sha256: String,
     warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetryTranscriptProjection {
+    turns: Vec<TranscriptTurn>,
+    warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetryComparisonResponse {
+    meeting_id: Uuid,
+    operation_id: Uuid,
+    source_transcript_sha256: String,
+    candidate_transcript_sha256: String,
+    current: RetryTranscriptProjection,
+    candidate: RetryTranscriptProjection,
+    quality: local_meeting_notes_session_core::capture_quality::CaptureQualityProjection,
+    recording_device: local_meeting_notes_session_core::capture_quality::RecordingDeviceProjection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum RetryDecisionInput {
+    KeepCurrent,
+    UseRetry,
+}
+
+#[derive(Debug, Serialize)]
+struct RetryDecisionResponse {
+    outcome: &'static str,
+    message: &'static str,
 }
 
 #[derive(Serialize)]
@@ -849,6 +1055,7 @@ struct RuntimeIdentity {
     admission: String,
     worker_build_sha256: String,
     worker_executable_sha256: String,
+    transcript_model_identity: String,
     tap_build_sha256: String,
     tap_path: PathBuf,
     /// The digest the verified manifest records for the speaker encoder.
@@ -870,6 +1077,11 @@ struct RuntimeIdentity {
     /// signal, so the recorder surface derives its honest boundary from it
     /// instead of hardcoding the placeholder's digest.
     encoder_available: bool,
+}
+
+struct TranscriptionExecutorControl {
+    stop: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
 }
 
 struct CaptureTaskControl {
@@ -1601,8 +1813,12 @@ fn start_meeting(
     validate_start_request(retention_days, &attestation)?;
     let state = app.state::<ApplicationState>();
     let _command = state.command_lock.lock().expect("command lock");
+    stop_owned_audio_playback(&state);
     if state.model_install_active.load(Ordering::SeqCst) {
         return Err("Wait for the speech model change to finish before starting a meeting.".into());
+    }
+    if transcription_capacity_full(&state) {
+        return Err("The local transcription queue is full. Wait for the previous meeting to finish processing.".into());
     }
     let meeting_id = Uuid::new_v4().to_string();
     let attempt_id = Uuid::new_v4().to_string();
@@ -1666,10 +1882,35 @@ fn start_meeting(
     Ok(snapshot)
 }
 
+fn transcription_capacity_full(state: &ApplicationState) -> bool {
+    let storage = state
+        .storage
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|context| context.storage.clone()));
+    let Some(storage) = storage else {
+        return true;
+    };
+    TranscriptionQueue::open(&storage)
+        .and_then(|queue| queue.discover())
+        .map(|discovery| {
+            discovery
+                .items
+                .into_iter()
+                .filter(|item| {
+                    item.terminal.is_none() && item.commit.is_none() && item.result.is_none()
+                })
+                .count()
+                >= 2
+        })
+        .unwrap_or(true)
+}
+
 #[tauri::command]
 fn stop_meeting(app: AppHandle) -> Result<AppSnapshot, String> {
     let state = app.state::<ApplicationState>();
     let _command = state.command_lock.lock().expect("command lock");
+    stop_owned_audio_playback(&state);
     let mut model = state.model.lock().expect("application model lock");
     if model.reducer.capture() != CaptureState::Recording {
         return Err("No recording is ready to stop.".into());
@@ -1695,6 +1936,7 @@ fn stop_meeting(app: AppHandle) -> Result<AppSnapshot, String> {
 fn dismiss_meeting(app: AppHandle) -> Result<AppSnapshot, String> {
     let state = app.state::<ApplicationState>();
     let _command = state.command_lock.lock().expect("command lock");
+    stop_owned_audio_playback(&state);
     let mut model = state.model.lock().expect("application model lock");
     if model.reducer.startup() != StartupState::Ready {
         return Err("Finish the installation check before starting another meeting.".into());
@@ -2011,8 +2253,8 @@ fn install_transcript_model(app: AppHandle, model_id: String) -> Result<AppSnaps
         let catalog = verified_model_catalog(&storage_context.manifest_path, &manifest)?
             .ok_or_else(|| "this build does not use downloadable speech models".to_string())?;
         let selected = catalog.model(&model_id).map_err(error_text)?.clone();
-        let previous_active = active_model(&storage_context.storage, &catalog)
-            .map_err(error_text)?;
+        let previous_active =
+            active_model(&storage_context.storage, &catalog).map_err(error_text)?;
         {
             let mut model = state.model.lock().expect("application model lock");
             if !matches!(
@@ -2129,8 +2371,7 @@ fn remove_transcript_model(
         matches!(
             model.reducer.startup(),
             StartupState::Ready | StartupState::ModelRequired
-        )
-            && model.reducer.capture() == CaptureState::Idle
+        ) && model.reducer.capture() == CaptureState::Idle
     };
     if !ready || sitting_task_active(&state) {
         return Err("Finish the current meeting before removing a speech model.".into());
@@ -2145,19 +2386,18 @@ fn remove_transcript_model(
         RuntimeManifest::load_and_verify(&storage_context.manifest_path).map_err(error_text)?;
     let catalog = verified_model_catalog(&storage_context.manifest_path, &manifest)?
         .ok_or_else(|| "this build does not use downloadable speech models".to_string())?;
-    remove_inactive_model(&storage_context.storage, &catalog, &model_id)
-        .map_err(|error| match error {
+    remove_inactive_model(&storage_context.storage, &catalog, &model_id).map_err(|error| {
+        match error {
             local_meeting_notes_session_core::model_store::ModelStoreError::ActiveModel => {
                 "Switch to the other speech model before removing this one.".into()
             }
             other => error_text(other),
-        })?;
+        }
+    })?;
     transcript_model_settings_for(&state)
 }
 
-fn note_model_settings_for(
-    state: &ApplicationState,
-) -> Result<NoteModelSettingsSnapshot, String> {
+fn note_model_settings_for(state: &ApplicationState) -> Result<NoteModelSettingsSnapshot, String> {
     let storage_context = state
         .storage
         .lock()
@@ -2231,7 +2471,10 @@ fn note_model_settings(
 }
 
 #[tauri::command]
-fn install_note_model(app: AppHandle, model_id: String) -> Result<NoteModelSettingsSnapshot, String> {
+fn install_note_model(
+    app: AppHandle,
+    model_id: String,
+) -> Result<NoteModelSettingsSnapshot, String> {
     let state = app.state::<ApplicationState>();
     let _command = state.command_lock.lock().expect("command lock");
     let capture_active = state
@@ -2267,7 +2510,10 @@ fn install_note_model(app: AppHandle, model_id: String) -> Result<NoteModelSetti
             .ok_or_else(|| "this build does not use downloadable note models".to_string())?;
         let selected = catalog.note_model(&model_id).map_err(error_text)?.clone();
         {
-            let mut setup = state.note_model_setup.lock().expect("note model setup lock");
+            let mut setup = state
+                .note_model_setup
+                .lock()
+                .expect("note model setup lock");
             *setup = NoteModelSetup {
                 state: "downloading".into(),
                 selected_model_id: Some(selected.id.clone()),
@@ -2281,7 +2527,9 @@ fn install_note_model(app: AppHandle, model_id: String) -> Result<NoteModelSetti
     let (storage_context, selected) = match preparation {
         Ok(prepared) => prepared,
         Err(error) => {
-            state.note_model_install_active.store(false, Ordering::SeqCst);
+            state
+                .note_model_install_active
+                .store(false, Ordering::SeqCst);
             return Err(error);
         }
     };
@@ -2337,13 +2585,22 @@ fn install_note_model(app: AppHandle, model_id: String) -> Result<NoteModelSetti
             }
         });
     if let Err(error) = spawned {
-        state.note_model_install_active.store(false, Ordering::SeqCst);
+        state
+            .note_model_install_active
+            .store(false, Ordering::SeqCst);
         {
-            let mut setup = state.note_model_setup.lock().expect("note model setup lock");
+            let mut setup = state
+                .note_model_setup
+                .lock()
+                .expect("note model setup lock");
             setup.state = "failed".into();
             setup.error = Some("The note model download could not start.".into());
         }
-        write_diagnostic(&state, "note_model_download_spawn_failed", &error.to_string());
+        write_diagnostic(
+            &state,
+            "note_model_download_spawn_failed",
+            &error.to_string(),
+        );
         return Err("The note model download could not start.".into());
     }
     note_model_settings_for(&state)
@@ -3080,7 +3337,9 @@ fn current_meeting_dir(state: &ApplicationState) -> Result<std::path::PathBuf, S
 /// snapshot is polled every 400 ms while recording, and putting operator prose on
 /// that path would carry it through every tick for no reader.
 #[tauri::command(async)]
-fn operator_note(state: State<'_, ApplicationState>) -> Result<operator_note::OperatorNote, String> {
+fn operator_note(
+    state: State<'_, ApplicationState>,
+) -> Result<operator_note::OperatorNote, String> {
     Ok(operator_note::read(&current_meeting_dir(&state)?))
 }
 
@@ -3195,7 +3454,9 @@ fn open_current_transcript_file(state: State<'_, ApplicationState>) -> Result<()
         }
         open_verified_transcript_file(&storage, &meeting_id, transcript)
     })
-    .map_err(|_| "The local transcript is unavailable. Reopen the meeting and try again.".to_string())?
+    .map_err(|_| {
+        "The local transcript is unavailable. Reopen the meeting and try again.".to_string()
+    })?
 }
 
 #[tauri::command(async)]
@@ -3781,8 +4042,9 @@ fn parse_sitting_request(
             Ok((SittingKind::OperatorSitting, None))
         }
         "negative-source" => {
-            let class = source_class
-                .ok_or_else(|| "A comparison recording needs its permitted source named.".to_string())?;
+            let class = source_class.ok_or_else(|| {
+                "A comparison recording needs its permitted source named.".to_string()
+            })?;
             if !PERMITTED_NEGATIVE_SOURCE_CLASSES.contains(&class) {
                 return Err("That comparison source is not permitted.".into());
             }
@@ -4017,7 +4279,13 @@ fn run_sitting_task(
         sitting_id: &sitting_id,
         completed: false,
     };
-    let _ = run_sitting_attempt(guard.state, &sitting_id, kind, source_class.as_deref(), &stop);
+    let _ = run_sitting_attempt(
+        guard.state,
+        &sitting_id,
+        kind,
+        source_class.as_deref(),
+        &stop,
+    );
     guard.completed = true;
 }
 
@@ -4051,7 +4319,13 @@ fn preview_enrollment_start_sitting(
     let spawn = std::thread::Builder::new()
         .name("sitting-capture-attempt".into())
         .spawn(move || {
-            run_sitting_task(task_app, task_sitting_id, parsed_kind, parsed_class, receiver)
+            run_sitting_task(
+                task_app,
+                task_sitting_id,
+                parsed_kind,
+                parsed_class,
+                receiver,
+            )
         });
     if spawn.is_err() {
         clear_sitting_task(&state, &sitting_id);
@@ -4196,8 +4470,8 @@ fn request_measured_choices(
     let digests = exact_digests(&digests, &["choices"])
         .map_err(|_| PreviewOperatingPointsResponse::unavailable())?;
     let expected = digests["choices"].clone();
-    let storage = preview_storage_clone(state)
-        .map_err(|_| PreviewOperatingPointsResponse::unavailable())?;
+    let storage =
+        preview_storage_clone(state).map_err(|_| PreviewOperatingPointsResponse::unavailable())?;
     let path = storage
         .resolve(&Path::new("enrollment-choices").join(format!("{operation_id}.json")))
         .map_err(|_| PreviewOperatingPointsResponse::unavailable())?;
@@ -4211,11 +4485,11 @@ fn request_measured_choices(
     if document.schema != "profile-choices/1" {
         return Err(PreviewOperatingPointsResponse::unavailable());
     }
-    let manifest_encoder = state
-        .runtime
-        .lock()
-        .ok()
-        .and_then(|runtime| runtime.as_ref().map(|runtime| runtime.encoder_sha256.clone()));
+    let manifest_encoder = state.runtime.lock().ok().and_then(|runtime| {
+        runtime
+            .as_ref()
+            .map(|runtime| runtime.encoder_sha256.clone())
+    });
     if manifest_encoder.as_deref() != Some(document.encoder_sha256.as_str()) {
         return Err(PreviewOperatingPointsResponse::unavailable());
     }
@@ -4260,8 +4534,7 @@ fn preview_enrollment_operating_points_for(
             state: "choices",
             choices_sha256: Some(digest),
             points: document.choices,
-            message: "Options measured from your own recordings. None is chosen for you."
-                .into(),
+            message: "Options measured from your own recordings. None is chosen for you.".into(),
         },
         Err(response) => response,
     }
@@ -4314,8 +4587,8 @@ fn preview_enrollment_build_profile_for(
     }
     // The selection binds to the reviewed measurements, not to hope: the
     // choices are recomputed and must hash to exactly what the operator saw.
-    let (current_digest, _document) = request_measured_choices(state)
-        .map_err(|response| response.message)?;
+    let (current_digest, _document) =
+        request_measured_choices(state).map_err(|response| response.message)?;
     if current_digest != choices_sha256 {
         return Err("The measured options changed. Review them again.".into());
     }
@@ -4433,10 +4706,108 @@ fn library_open_note(
     handle: String,
     state: State<'_, ApplicationState>,
 ) -> library_reader::LibraryNoteResponse {
+    let Ok(_command) = state.command_lock.lock() else {
+        return library_reader::LibraryReader::unavailable_note("");
+    };
+    // A detail view is a playback boundary: reopening it must never leave an
+    // earlier recording playing behind a different meeting.
+    stop_owned_audio_playback(&state);
     state.with_preview_library(
         || library_reader::LibraryReader::unavailable_note(""),
         |reader, active| reader.open_note(&handle, active),
     )
+}
+
+/// Starts the only retained-audio playback route. `handle` is an opaque,
+/// source-bound Library capability; the browser cannot select a path, source,
+/// executable, or any other child-process argument.
+#[tauri::command]
+fn library_play_retained_audio(
+    handle: String,
+    state: State<'_, ApplicationState>,
+) -> RetainedAudioPlaybackResponse {
+    let Ok(_command) = state.command_lock.lock() else {
+        return audio_playback_response(
+            "unavailable",
+            None,
+            "Retained audio is unavailable. Reopen Library and try again.",
+        );
+    };
+    // A new source always owns the sole player slot. Reap the former child
+    // before consuming the freshly revalidated capability for this launch.
+    stop_owned_audio_playback(&state);
+    let grant = match state.with_preview_library(
+        || {
+            Err(library_reader::LibraryAudioPlaybackAccess {
+                state: "unavailable",
+                message: "Retained audio is unavailable. Reopen Library and try again.".into(),
+            })
+        },
+        |reader, active| reader.authorize_audio_playback(&handle, active),
+    ) {
+        Ok(grant) => grant,
+        Err(access) if access.state == "stale" => {
+            return audio_playback_response(
+                "unavailable",
+                None,
+                "That view is no longer current. Reopen it and try again.",
+            );
+        }
+        Err(_) => {
+            return audio_playback_response(
+                "unavailable",
+                None,
+                "Retained audio is unavailable. Reopen Library and try again.",
+            );
+        }
+    };
+    let source = match grant.source() {
+        library_reader::RetainedAudioSource::Microphone => "microphone",
+        library_reader::RetainedAudioSource::System => "system",
+    };
+    let playback = match RetainedAudioPlayback::spawn(grant) {
+        Ok(playback) => playback,
+        Err(_) => {
+            return audio_playback_response(
+                "unavailable",
+                None,
+                "Retained audio is unavailable. Reopen Library and try again.",
+            );
+        }
+    };
+    let Ok(mut slot) = state.audio_playback.lock() else {
+        let mut playback = playback;
+        playback.stop_and_reap();
+        return audio_playback_response(
+            "unavailable",
+            None,
+            "Retained audio is unavailable. Reopen Library and try again.",
+        );
+    };
+    *slot = Some(playback);
+    audio_playback_response("playing", Some(source), "Playing retained audio.")
+}
+
+#[tauri::command]
+fn library_retained_audio_playback_status(
+    state: State<'_, ApplicationState>,
+) -> RetainedAudioPlaybackResponse {
+    owned_audio_playback_status(&state)
+}
+
+#[tauri::command]
+fn library_stop_retained_audio(
+    state: State<'_, ApplicationState>,
+) -> RetainedAudioPlaybackResponse {
+    let Ok(_command) = state.command_lock.lock() else {
+        return audio_playback_response(
+            "unavailable",
+            None,
+            "Retained audio is unavailable. Reopen Library and try again.",
+        );
+    };
+    stop_owned_audio_playback(&state);
+    audio_playback_response("idle", None, "No recording is playing.")
 }
 
 #[derive(Serialize)]
@@ -4496,6 +4867,7 @@ fn preview_delete_meeting_audio_for(
     let Ok(_command) = state.command_lock.lock() else {
         return unavailable_preview_audio_deletion();
     };
+    stop_owned_audio_playback(state);
     // Deletion mutates retained-audio state the take's evidence writes sit
     // beside; like every mutating command it refuses during a take instead
     // of interleaving with it.
@@ -4661,6 +5033,7 @@ fn preview_delete_meeting_transcript_for(
     let Ok(_command) = state.command_lock.lock() else {
         return unavailable_preview_transcript_deletion();
     };
+    stop_owned_audio_playback(state);
     if sitting_task_active(state) {
         return PreviewTranscriptDeletionResponse {
             state: "capture-active",
@@ -4724,9 +5097,10 @@ fn preview_delete_meeting_transcript_for(
             "removed",
             "The interrupted transcript deletion was recovered and completed.",
         ),
-        Ok(manual_delete_facade::TranscriptDeletionFacadeOutcome::AlreadyRemoved) => {
-            ("already-removed", "This meeting transcript was already deleted.")
-        }
+        Ok(manual_delete_facade::TranscriptDeletionFacadeOutcome::AlreadyRemoved) => (
+            "already-removed",
+            "This meeting transcript was already deleted.",
+        ),
         Ok(manual_delete_facade::TranscriptDeletionFacadeOutcome::DeferredActive) => (
             "deferred-active",
             "Transcript deletion was deferred because this meeting is still active.",
@@ -4828,6 +5202,7 @@ fn preview_delete_meeting_for(
     let Ok(_command) = state.command_lock.lock() else {
         return unavailable_preview_meeting_deletion();
     };
+    stop_owned_audio_playback(state);
     if sitting_task_active(state) {
         return PreviewMeetingDeletionResponse {
             state: "capture-active",
@@ -4880,9 +5255,9 @@ fn preview_delete_meeting_for(
     } else {
         manual_delete_facade::MeetingDeletionReview::NotReviewed
     };
-    let result = state.whole_meeting_deletion_facade().delete_meeting(
-        manual_delete_facade::WholeMeetingDeletionUiArgs { meeting_id, review },
-    );
+    let result = state
+        .whole_meeting_deletion_facade()
+        .delete_meeting(manual_delete_facade::WholeMeetingDeletionUiArgs { meeting_id, review });
     let (response_state, message) = match result {
         Ok(manual_delete_facade::WholeMeetingDeletionFacadeOutcome::MeetingRemoved) => (
             "removed",
@@ -5094,7 +5469,7 @@ fn load_bound_preview_transcript_projection(
         return Err("the selected transcript bytes changed".into());
     }
     let (turns, mut warnings) =
-        project_current_transcript(&directory, meeting_id, expected, &bytes)?;
+        project_current_transcript(&directory, meeting_id, expected, &bytes, true)?;
     let current = load_meeting(&directory).map_err(error_text)?;
     if current.artifacts.current_transcript.as_ref() != Some(expected)
         || artifact_ref(&directory, &expected.relative_path).map_err(error_text)? != *expected
@@ -5108,6 +5483,618 @@ fn load_bound_preview_transcript_projection(
         );
     }
     Ok((turns, warnings))
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SpeakerCorrectionResponse {
+    operation_id: Uuid,
+    applied_turn_count: usize,
+    message: String,
+}
+
+/// A private, exact vocabulary row together with its use in the meeting the
+/// operator is currently reviewing. The count is derived from the verified
+/// projection below; it never records a new transcript derivative.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalVocabularyEntryResponse {
+    id: Uuid,
+    source_phrase: String,
+    preferred_replacement: String,
+    enabled: bool,
+    applied_turn_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalVocabularySheetResponse {
+    entries: Vec<LocalVocabularyEntryResponse>,
+}
+
+fn local_vocabulary_error(
+    error: local_meeting_notes_session_core::local_vocabulary::LocalVocabularyError,
+) -> String {
+    use local_meeting_notes_session_core::local_vocabulary::LocalVocabularyError;
+
+    match error {
+        LocalVocabularyError::DuplicateSourcePhrase => {
+            "That Before phrase already has a replacement. Edit the existing row instead.".into()
+        }
+        LocalVocabularyError::NotFound => {
+            "That replacement is no longer available. Reopen Vocabulary and try again.".into()
+        }
+        LocalVocabularyError::TooManyEntries => {
+            "You can save up to 256 local replacements.".into()
+        }
+        LocalVocabularyError::InvalidEntry(_) => {
+            "Use two different single-line phrases, up to 256 characters each.".into()
+        }
+        LocalVocabularyError::TextTooLarge | LocalVocabularyError::TooManyRangeReplacements => {
+            "Yawn could not safely check this transcript against local vocabulary. Nothing changed. Reopen the meeting and try again.".into()
+        }
+        LocalVocabularyError::DocumentTooLarge => {
+            "Your saved vocabulary is over its 256 KB limit. Nothing changed.".into()
+        }
+        LocalVocabularyError::InvalidPrivateStorage
+        | LocalVocabularyError::Malformed(_)
+        | LocalVocabularyError::Io(_)
+        | LocalVocabularyError::Json(_) => {
+            "Your saved vocabulary could not be read. Nothing changed. Reopen the meeting and try again.".into()
+        }
+    }
+}
+
+fn with_current_local_vocabulary<T>(
+    meeting_id: Uuid,
+    source_transcript_sha256: &str,
+    state: &ApplicationState,
+    operation: impl FnOnce(
+        &local_meeting_notes_session_core::local_vocabulary::LocalVocabularyStore,
+        &[TranscriptTurn],
+    ) -> Result<T, String>,
+) -> Result<T, String> {
+    let _command = state
+        .command_lock
+        .lock()
+        .map_err(|_| "Vocabulary is unavailable. Reopen the meeting and try again.")?;
+    if sitting_task_active(state) {
+        return Err("Finish the setup recording before changing local vocabulary.".into());
+    }
+    {
+        let model = state
+            .model
+            .lock()
+            .map_err(|_| "Vocabulary is unavailable. Reopen the meeting and try again.")?;
+        if model.reducer.startup() != StartupState::Ready
+            || model.reducer.capture() != CaptureState::Idle
+        {
+            return Err("Finish the current recording before changing local vocabulary.".into());
+        }
+    }
+    let storage = preview_storage_clone(state)
+        .map_err(|_| "Local meeting storage is unavailable. Reopen the app and try again.")?;
+    let coordination = state.meeting_storage_coordination()?;
+    let _lease = coordination
+        .acquire(&meeting_id.to_string())
+        .map_err(|_| "Another action is using this meeting. Reopen it and try again.")?;
+    let directory = meeting_dir(&storage, &meeting_id.to_string()).map_err(error_text)?;
+    let meeting = load_meeting(&directory).map_err(error_text)?;
+    let current = meeting
+        .artifacts
+        .current_transcript
+        .as_ref()
+        .ok_or_else(|| "This meeting no longer has a retained transcript.".to_string())?;
+    if meeting.meeting_id != meeting_id.to_string() || current.sha256 != source_transcript_sha256 {
+        return Err("The transcript changed. Reopen the meeting and try again.".into());
+    }
+    let (turns, _) = load_transcript_projection(&directory, &meeting_id.to_string(), current)?;
+    let vocabulary =
+        local_meeting_notes_session_core::local_vocabulary::LocalVocabularyStore::open(&storage)
+            .map_err(local_vocabulary_error)?;
+    operation(&vocabulary, &turns)
+}
+
+fn local_vocabulary_sheet_response(
+    vocabulary: &local_meeting_notes_session_core::local_vocabulary::LocalVocabularyStore,
+    turns: &[TranscriptTurn],
+) -> Result<LocalVocabularySheetResponse, String> {
+    let entries = vocabulary.list().map_err(local_vocabulary_error)?;
+    let mut applied_by_entry = HashMap::<Uuid, usize>::new();
+    // This is a review-only count, not a note-generation frame. Project each
+    // retained turn so the count preserves its entry id without imposing the
+    // worker transport's 64-range ceiling. Withheld rows are never supplied to
+    // the store, even if a later parser accidentally carries text in memory.
+    for turn in turns.iter().filter(|turn| !turn.withheld) {
+        for application in vocabulary
+            .project(&turn.text)
+            .map_err(local_vocabulary_error)?
+            .applied
+        {
+            *applied_by_entry.entry(application.entry_id).or_default() += 1;
+        }
+    }
+    Ok(LocalVocabularySheetResponse {
+        entries: entries
+            .into_iter()
+            .map(|entry| LocalVocabularyEntryResponse {
+                id: entry.id,
+                source_phrase: entry.source_phrase,
+                preferred_replacement: entry.preferred_replacement,
+                enabled: entry.enabled,
+                applied_turn_count: applied_by_entry.remove(&entry.id).unwrap_or(0),
+            })
+            .collect(),
+    })
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn local_vocabulary_list(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    state: State<'_, ApplicationState>,
+) -> Result<LocalVocabularySheetResponse, String> {
+    with_current_local_vocabulary(
+        meeting_id,
+        &source_transcript_sha256,
+        &state,
+        |vocabulary, turns| local_vocabulary_sheet_response(vocabulary, turns),
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn local_vocabulary_add(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    source_phrase: String,
+    preferred_replacement: String,
+    state: State<'_, ApplicationState>,
+) -> Result<LocalVocabularySheetResponse, String> {
+    with_current_local_vocabulary(
+        meeting_id,
+        &source_transcript_sha256,
+        &state,
+        |vocabulary, turns| {
+            vocabulary
+                .add(&source_phrase, &preferred_replacement)
+                .map_err(local_vocabulary_error)?;
+            local_vocabulary_sheet_response(vocabulary, turns)
+        },
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn local_vocabulary_edit(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    id: Uuid,
+    source_phrase: String,
+    preferred_replacement: String,
+    state: State<'_, ApplicationState>,
+) -> Result<LocalVocabularySheetResponse, String> {
+    with_current_local_vocabulary(
+        meeting_id,
+        &source_transcript_sha256,
+        &state,
+        |vocabulary, turns| {
+            vocabulary
+                .edit(id, &source_phrase, &preferred_replacement)
+                .map_err(local_vocabulary_error)?;
+            local_vocabulary_sheet_response(vocabulary, turns)
+        },
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn local_vocabulary_set_enabled(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    id: Uuid,
+    enabled: bool,
+    state: State<'_, ApplicationState>,
+) -> Result<LocalVocabularySheetResponse, String> {
+    with_current_local_vocabulary(
+        meeting_id,
+        &source_transcript_sha256,
+        &state,
+        |vocabulary, turns| {
+            vocabulary
+                .set_enabled(id, enabled)
+                .map_err(local_vocabulary_error)?;
+            local_vocabulary_sheet_response(vocabulary, turns)
+        },
+    )
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn local_vocabulary_delete(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    id: Uuid,
+    state: State<'_, ApplicationState>,
+) -> Result<LocalVocabularySheetResponse, String> {
+    with_current_local_vocabulary(
+        meeting_id,
+        &source_transcript_sha256,
+        &state,
+        |vocabulary, turns| {
+            vocabulary.delete(id).map_err(local_vocabulary_error)?;
+            local_vocabulary_sheet_response(vocabulary, turns)
+        },
+    )
+}
+
+/// Saves one meeting-local speaker-name correction without rewriting the
+/// retained transcript. The source digest and original source label are both
+/// rechecked under the meeting lease, so a stale screen cannot rename a newer
+/// projection or broaden a correction to a group it did not display.
+#[tauri::command(rename_all = "camelCase")]
+fn correct_speaker_name(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    source_speaker: Option<String>,
+    replacement: String,
+    state: State<'_, ApplicationState>,
+) -> Result<SpeakerCorrectionResponse, String> {
+    correct_speaker_name_for(
+        meeting_id,
+        source_transcript_sha256,
+        source_speaker,
+        replacement,
+        &state,
+    )
+}
+
+fn correct_speaker_name_for(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    source_speaker: Option<String>,
+    replacement: String,
+    state: &ApplicationState,
+) -> Result<SpeakerCorrectionResponse, String> {
+    let _command = state
+        .command_lock
+        .lock()
+        .map_err(|_| "Speaker correction is unavailable. Reopen the meeting and try again.")?;
+    if sitting_task_active(&state) {
+        return Err("Finish the setup recording before correcting a speaker name.".into());
+    }
+    {
+        let model = state
+            .model
+            .lock()
+            .map_err(|_| "Speaker correction is unavailable. Reopen the meeting and try again.")?;
+        if model.reducer.startup() != StartupState::Ready
+            || model.reducer.capture() != CaptureState::Idle
+        {
+            return Err("Finish the current recording before correcting a speaker name.".into());
+        }
+    }
+    let storage = preview_storage_clone(&state)
+        .map_err(|_| "Local meeting storage is unavailable. Reopen the app and try again.")?;
+    let coordination = state.meeting_storage_coordination()?;
+    let _lease = coordination
+        .acquire(&meeting_id.to_string())
+        .map_err(|_| "Another action is using this meeting. Reopen it and try again.")?;
+    let directory = meeting_dir(&storage, &meeting_id.to_string()).map_err(error_text)?;
+    let meeting = load_meeting(&directory).map_err(error_text)?;
+    let current = meeting
+        .artifacts
+        .current_transcript
+        .as_ref()
+        .ok_or_else(|| "This meeting no longer has a retained transcript.".to_string())?;
+    if current.sha256 != source_transcript_sha256 {
+        return Err("The transcript changed. Reopen the meeting and try again.".into());
+    }
+    let (turns, _) = load_transcript_projection(&directory, &meeting_id.to_string(), current)?;
+    let applied_turn_count = turns
+        .iter()
+        .filter(|turn| !turn.withheld && turn.source_speaker == source_speaker)
+        .count();
+    if applied_turn_count == 0 {
+        return Err(
+            "That speaker group is no longer available. Reopen the meeting and try again.".into(),
+        );
+    }
+    let replacement = speaker_correction::normalize_replacement(&replacement)?;
+    let operation_id = Uuid::new_v4();
+    speaker_correction::append(
+        &directory,
+        meeting_id,
+        speaker_correction::SpeakerCorrectionOperation {
+            operation_id,
+            source_transcript_sha256: source_transcript_sha256.clone(),
+            source_speaker: source_speaker.clone(),
+            replacement: replacement.clone(),
+            applied_at_epoch_seconds: now_epoch_seconds(),
+        },
+    )?;
+    let stored =
+        speaker_correction::current_labels(&directory, meeting_id, &source_transcript_sha256)
+            .map_err(|_| "The saved speaker correction could not be verified.".to_string())?;
+    let restored_source_label = replacement == source_speaker.as_deref().unwrap_or("Unattributed");
+    if (restored_source_label && stored.contains_key(&source_speaker))
+        || (!restored_source_label && stored.get(&source_speaker) != Some(&replacement))
+    {
+        return Err("The saved speaker correction could not be verified.".into());
+    }
+    with_preview_library_invalidated(&state, || ())
+        .map_err(|_| "The meeting was corrected, but the library could not refresh.".to_string())?;
+    Ok(SpeakerCorrectionResponse {
+        operation_id,
+        applied_turn_count,
+        message: format!(
+            "Speaker name updated for {applied_turn_count} transcript {}. The retained transcript was not changed.",
+            if applied_turn_count == 1 {
+                "turn"
+            } else {
+                "turns"
+            }
+        ),
+    })
+}
+
+/// Derive the note-generation overlay from the same digest-bound correction
+/// sidecar that supplies the transcript screen. A malformed or stale sidecar
+/// has no fallback: the existing note remains current until a later request
+/// can pass this check.
+pub(crate) fn speaker_label_overrides_for(
+    meeting_id: Uuid,
+    source_transcript_sha256: &str,
+    state: &ApplicationState,
+) -> Result<Vec<local_meeting_notes_session_core::operations::SpeakerLabelOverride>, String> {
+    let storage = preview_storage_clone(state).map_err(|_| {
+        "Local meeting storage is unavailable. Reopen the app and try again.".to_string()
+    })?;
+    let directory = meeting_dir(&storage, &meeting_id.to_string()).map_err(error_text)?;
+    let meeting = load_meeting(&directory).map_err(error_text)?;
+    let current = meeting
+        .artifacts
+        .current_transcript
+        .as_ref()
+        .ok_or_else(|| "This meeting no longer has a retained transcript.".to_string())?;
+    if current.sha256 != source_transcript_sha256 {
+        return Err("The transcript changed. Refresh the meeting and try again.".into());
+    }
+    speaker_correction::current_label_overrides(&directory, meeting_id, source_transcript_sha256)
+        .map_err(|_| {
+            "Saved speaker corrections could not be read, so the note was not replaced.".into()
+        })
+}
+
+/// Derive the prompt-only vocabulary overlay from the same verified meeting
+/// projection the review screen uses. Withheld rows carry empty text, so their
+/// source indices stay stable without exposing or replacing withheld words.
+pub(crate) fn vocabulary_replacements_for(
+    meeting_id: Uuid,
+    source_transcript_sha256: &str,
+    state: &ApplicationState,
+) -> Result<
+    Vec<local_meeting_notes_session_core::local_vocabulary::VocabularyRangeReplacement>,
+    String,
+> {
+    let storage = preview_storage_clone(state).map_err(|_| {
+        "Local meeting storage is unavailable. Reopen the app and try again.".to_string()
+    })?;
+    let directory = meeting_dir(&storage, &meeting_id.to_string()).map_err(error_text)?;
+    current_vocabulary_replacements(&storage, &directory, meeting_id, source_transcript_sha256)
+}
+
+pub(crate) fn current_vocabulary_replacements(
+    storage: &StorageRoot,
+    meeting_directory: &Path,
+    meeting_id: Uuid,
+    source_transcript_sha256: &str,
+) -> Result<
+    Vec<local_meeting_notes_session_core::local_vocabulary::VocabularyRangeReplacement>,
+    String,
+> {
+    let meeting = load_meeting(meeting_directory).map_err(error_text)?;
+    let current = meeting
+        .artifacts
+        .current_transcript
+        .as_ref()
+        .ok_or_else(|| "This meeting no longer has a retained transcript.".to_string())?;
+    if current.sha256 != source_transcript_sha256 || meeting.meeting_id != meeting_id.to_string() {
+        return Err("The transcript changed. Refresh the meeting and try again.".into());
+    }
+    let (turns, _) =
+        load_transcript_projection(meeting_directory, &meeting_id.to_string(), current)?;
+    let source_turns = turns
+        .iter()
+        .map(|turn| turn.text.as_str())
+        .collect::<Vec<_>>();
+    local_meeting_notes_session_core::local_vocabulary::LocalVocabularyStore::open(storage)
+        .and_then(|vocabulary| vocabulary.project_turns(&source_turns))
+        .map_err(|_| "Local vocabulary could not be verified, so the note was not replaced.".into())
+}
+
+fn retry_comparison_response(
+    state: &ApplicationState,
+    operation: &product_facade::TranscriptRetryOperation,
+) -> Result<RetryComparisonResponse, String> {
+    let storage = preview_storage_clone(state)
+        .map_err(|_| "Local meeting storage is unavailable. Reopen the app and try again.")?;
+    let coordination = state.meeting_storage_coordination()?;
+    let _lease = coordination
+        .acquire(&operation.meeting_id.to_string())
+        .map_err(|_| "Another action is using this meeting. Reopen it and try again.")?;
+    let directory = meeting_dir(&storage, &operation.meeting_id.to_string()).map_err(error_text)?;
+    let meeting = load_meeting(&directory).map_err(error_text)?;
+    verify_record_artifacts(&directory, &meeting).map_err(error_text)?;
+    let current = meeting
+        .artifacts
+        .current_transcript
+        .as_ref()
+        .ok_or_else(|| "This meeting no longer has a retained transcript.".to_string())?;
+    if current.sha256 != operation.source_transcript_sha256 {
+        return Err("The transcript changed. Refresh the meeting and try again.".into());
+    }
+    let (current_turns, current_warnings) =
+        load_transcript_projection(&directory, &operation.meeting_id.to_string(), current)?;
+    let (candidate_turns, candidate_warnings) = load_transcript_projection_without_corrections(
+        &directory,
+        &operation.meeting_id.to_string(),
+        &operation.candidate_transcript,
+    )?;
+    let quality = local_meeting_notes_session_core::capture_quality::project_capture_quality(
+        &directory,
+        &meeting,
+    )
+    .map_err(|_| {
+        "Recording-quality evidence changed while opening this retry. Reopen the meeting and try again."
+            .to_string()
+    })?;
+    let recording_device =
+        local_meeting_notes_session_core::capture_quality::project_recording_device(
+            &directory,
+            &meeting,
+        )
+        .map_err(|_| {
+            "Recording-device evidence changed while opening this retry. Reopen the meeting and try again."
+                .to_string()
+        })?;
+    Ok(RetryComparisonResponse {
+        meeting_id: operation.meeting_id,
+        operation_id: operation.operation_id,
+        source_transcript_sha256: operation.source_transcript_sha256.clone(),
+        candidate_transcript_sha256: operation.candidate_transcript.sha256.clone(),
+        current: RetryTranscriptProjection {
+            turns: current_turns,
+            warnings: current_warnings,
+        },
+        candidate: RetryTranscriptProjection {
+            turns: candidate_turns,
+            warnings: candidate_warnings,
+        },
+        quality,
+        recording_device,
+    })
+}
+
+fn retry_command_is_available(state: &ApplicationState) -> Result<(), String> {
+    if sitting_task_active(state) {
+        return Err("Finish the setup recording first.".into());
+    }
+    let capture = state
+        .model
+        .lock()
+        .map_err(|_| "Finish the current recording first.".to_string())?
+        .reducer
+        .capture();
+    if capture != CaptureState::Idle {
+        return Err("Finish the current recording first.".into());
+    }
+    Ok(())
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn transcript_retry_start(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    facade: State<'_, product_facade::ProductOperationFacade>,
+    state: State<'_, ApplicationState>,
+) -> Result<RetryComparisonResponse, String> {
+    retry_command_is_available(&state)?;
+    let operation = facade
+        .start_transcript_retry(TranscriptRetryUiArgs {
+            meeting_id,
+            source_transcript_sha256,
+        })
+        .map_err(product_facade::ProductOperationFacadeError::safe_copy)
+        .map_err(str::to_owned)?;
+    facade.finish(operation.operation_id);
+    retry_comparison_response(&state, &operation)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn transcript_retry_pending(
+    meeting_id: Uuid,
+    source_transcript_sha256: String,
+    facade: State<'_, product_facade::ProductOperationFacade>,
+    state: State<'_, ApplicationState>,
+) -> Result<Option<RetryComparisonResponse>, String> {
+    retry_command_is_available(&state)?;
+    let operation = facade
+        .pending_transcript_retry(TranscriptRetryUiArgs {
+            meeting_id,
+            source_transcript_sha256,
+        })
+        .map_err(product_facade::ProductOperationFacadeError::safe_copy)
+        .map_err(str::to_owned)?;
+    operation
+        .as_ref()
+        .map(|operation| retry_comparison_response(&state, operation))
+        .transpose()
+}
+
+/// The exact operator copy for a settled retry decision.
+///
+/// Promotion always leaves the meeting without a generated note, but it cannot
+/// report having *cleared* one. The meeting may never have had a note, and a
+/// replayed promotion clears nothing because the pointer already moved. So the
+/// success copy states what is now true and names the next step, instead of
+/// claiming an event this command has no fact for.
+fn retry_decision_response(
+    outcome: TranscriptRetryOutcome,
+) -> Result<RetryDecisionResponse, String> {
+    match outcome {
+        TranscriptRetryOutcome::CurrentKept => Ok(RetryDecisionResponse {
+            outcome: "current-kept",
+            message: "The current transcript was kept.",
+        }),
+        TranscriptRetryOutcome::CandidatePromoted => Ok(RetryDecisionResponse {
+            outcome: "candidate-promoted",
+            message: "The retry transcript is now current. Generate a new note when you're ready.",
+        }),
+        TranscriptRetryOutcome::CandidateAvailableForComparison => {
+            Err("The retry candidate is still awaiting a decision.".into())
+        }
+    }
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn transcript_retry_decide(
+    meeting_id: Uuid,
+    operation_id: Uuid,
+    source_transcript_sha256: String,
+    candidate_transcript_sha256: String,
+    decision: RetryDecisionInput,
+    facade: State<'_, product_facade::ProductOperationFacade>,
+    state: State<'_, ApplicationState>,
+) -> Result<RetryDecisionResponse, String> {
+    retry_command_is_available(&state)?;
+    if !valid_sha256(&candidate_transcript_sha256) {
+        return Err("The retry candidate changed. Reopen the meeting and try again.".into());
+    }
+    let operation = product_facade::TranscriptRetryOperation {
+        operation_id,
+        meeting_id,
+        source_transcript_sha256,
+        candidate_transcript: ArtifactRef {
+            relative_path: format!("transcript/{candidate_transcript_sha256}.json"),
+            sha256: candidate_transcript_sha256,
+        },
+    };
+    let outcome = facade
+        .decide_transcript_retry(
+            operation,
+            match decision {
+                RetryDecisionInput::KeepCurrent => {
+                    product_facade::TranscriptRetryDecision::KeepCurrent
+                }
+                RetryDecisionInput::UseRetry => product_facade::TranscriptRetryDecision::UseRetry,
+            },
+        )
+        .map_err(product_facade::ProductOperationFacadeError::safe_copy)
+        .map_err(str::to_owned)?;
+    let response = retry_decision_response(outcome)?;
+    if matches!(outcome, TranscriptRetryOutcome::CandidatePromoted) {
+        with_preview_library_invalidated(&state, || ()).map_err(|_| {
+            "The retry transcript was selected, but the library could not refresh.".to_string()
+        })?;
+    }
+    Ok(response)
 }
 
 fn main() {
@@ -5167,22 +6154,32 @@ fn main() {
             library_snapshot,
             library_set_meeting_title,
             library_open_note,
+            library_play_retained_audio,
+            library_retained_audio_playback_status,
+            library_stop_retained_audio,
             library_open_transcript,
             library_open_transcript_file,
+            correct_speaker_name,
+            local_vocabulary_list,
+            local_vocabulary_add,
+            local_vocabulary_edit,
+            local_vocabulary_set_enabled,
+            local_vocabulary_delete,
             library_save_operator_note,
             preview_delete_meeting_audio,
             preview_delete_meeting_transcript,
             preview_delete_meeting,
             preview_library_open_evidence,
-            product_facade::regenerate_note
+            product_facade::restore_withheld_turn,
+            product_facade::regenerate_note,
+            transcript_retry_start,
+            transcript_retry_pending,
+            transcript_retry_decide
         ])
         .setup(|app| {
-            let settings = tauri::menu::MenuItemBuilder::with_id(
-                "open-settings",
-                "Settings…",
-            )
-            .accelerator("CmdOrCtrl+,")
-            .build(app)?;
+            let settings = tauri::menu::MenuItemBuilder::with_id("open-settings", "Settings…")
+                .accelerator("CmdOrCtrl+,")
+                .build(app)?;
             let app_menu = tauri::menu::SubmenuBuilder::new(app, "Yawn")
                 .about(None)
                 .separator()
@@ -5240,6 +6237,7 @@ fn main() {
 
 fn initialize_application(app: AppHandle, retry: bool) {
     let state = app.state::<ApplicationState>();
+    stop_owned_audio_playback(&state);
     if let Ok(mut profile) = state.preview_profile.lock() {
         *profile = PreviewProfileSnapshot::unavailable();
     }
@@ -5259,13 +6257,36 @@ fn initialize_application(app: AppHandle, retry: bool) {
         .expect("worker process lock")
         .take()
         .map(|mut worker| worker.stop_and_wait(Duration::from_millis(750)));
-    if let Some(Err(error)) = worker_cleanup {
+    let worker_cleanup_failed = if let Some(Err(error)) = worker_cleanup {
         write_diagnostic(&state, "worker_cleanup_failed", &error.to_string());
+        true
+    } else {
+        false
+    };
+    let transcription_worker_cleanup = state
+        .transcription_worker
+        .lock()
+        .expect("transcription worker process lock")
+        .take()
+        .map(|mut worker| worker.stop_and_wait(Duration::from_millis(750)));
+    let transcription_worker_cleanup_failed = if let Some(Err(error)) = transcription_worker_cleanup
+    {
+        write_diagnostic(
+            &state,
+            "transcription_worker_cleanup_failed",
+            &error.to_string(),
+        );
+        true
+    } else {
+        false
+    };
+    stop_transcription_queue_executor(&state);
+    if worker_cleanup_failed || transcription_worker_cleanup_failed {
         finish_startup_failure(
             &state,
             retry,
             StartupFailure::Diagnostic,
-            "the previous worker could not be stopped safely",
+            "a previous worker could not be stopped safely",
         );
         return;
     }
@@ -5311,7 +6332,8 @@ fn initialize_application(app: AppHandle, retry: bool) {
         );
         return;
     }
-    if let Err(error) = reconcile_pending_transcript_deletions(&storage_context.storage, &coordination)
+    if let Err(error) =
+        reconcile_pending_transcript_deletions(&storage_context.storage, &coordination)
     {
         let _ = write_private_diagnostic(
             &storage_context.diagnostics,
@@ -5387,6 +6409,12 @@ fn initialize_application(app: AppHandle, retry: bool) {
             )
         }
         Err(error) => {
+            let _ = state
+                .worker
+                .lock()
+                .expect("worker process lock")
+                .take()
+                .map(|mut worker| worker.stop_and_wait(Duration::from_millis(750)));
             let _ = write_private_diagnostic(
                 &storage_context.diagnostics,
                 "meeting_recovery_failed",
@@ -5496,7 +6524,7 @@ fn initialize_application(app: AppHandle, retry: bool) {
     };
     set_startup_message(&state, "Starting the local transcription engine.");
     let worker_path = storage_context.resource_root.join(&manifest.runtime.path);
-    let mut command = Command::new(worker_path);
+    let mut command = Command::new(&worker_path);
     command
         .args(["-E", "-s", "-B", "-m", "worker.main"])
         .arg("--app-data-root")
@@ -5617,11 +6645,16 @@ fn initialize_application(app: AppHandle, retry: bool) {
         .iter()
         .map(|model| (model.id.clone(), model.sha256.clone()))
         .collect();
-    packaged_models.extend(external_models);
+    packaged_models.extend(external_models.clone());
     let runtime = RuntimeIdentity {
         admission: "internal-alpha".into(),
         worker_build_sha256: manifest.worker.sha256.clone(),
         worker_executable_sha256: manifest.runtime.sha256.clone(),
+        transcript_model_identity: installed_transcript_model
+            .as_ref()
+            .map(|model| format!("{}@{}", model.entry.id, model.entry.revision))
+            .or_else(|| manifest.models.first().map(|model| model.id.clone()))
+            .unwrap_or_else(|| "bundled-transcript-model".into()),
         tap_build_sha256: manifest.tap.sha256.clone(),
         tap_path: storage_context.resource_root.join(&manifest.tap.path),
         encoder_sha256: manifest.encoder.sha256.clone(),
@@ -5630,9 +6663,70 @@ fn initialize_application(app: AppHandle, retry: bool) {
             != Some(std::ffi::OsStr::new("encoder-unavailable.identity")),
     };
     *state.worker.lock().expect("worker process lock") = Some(worker);
+    let mut transcription_command = Command::new(&worker_path);
+    transcription_command
+        .args(["-E", "-s", "-B", "-m", "worker.main"])
+        .arg("--app-data-root")
+        .arg(storage_context.storage.path())
+        .arg("--runtime-manifest")
+        .arg(&storage_context.manifest_path);
+    if let Some(installed) = installed_transcript_model.as_ref() {
+        transcription_command
+            .arg("--transcript-model-receipt")
+            .arg(&installed.receipt_path);
+    }
+    transcription_command.current_dir(&storage_context.resource_root);
+    let mut transcription_worker = match OwnedChild::spawn(&mut transcription_command) {
+        Ok(worker) => worker,
+        Err(error) => {
+            let _ = state
+                .worker
+                .lock()
+                .expect("worker process lock")
+                .take()
+                .map(|mut worker| worker.stop_and_wait(Duration::from_millis(750)));
+            let _ = write_private_diagnostic(
+                &storage_context.diagnostics,
+                "transcription_worker_spawn_failed",
+                &error.to_string(),
+            );
+            finish_startup_failure(
+                &state,
+                retry,
+                StartupFailure::Diagnostic,
+                "the dedicated transcription worker could not start",
+            );
+            return;
+        }
+    };
+    let transcription_operations = internal_alpha_operations();
+    match transcription_worker.wait_ready(Duration::from_secs(10), &transcription_operations) {
+        Ok(ready) if manifest.matches_ready_with_external_models(&ready, &external_models) => {}
+        _ => {
+            let mut worker = transcription_worker;
+            let _ = worker.stop_and_wait(Duration::from_millis(750));
+            let _ = state
+                .worker
+                .lock()
+                .expect("worker process lock")
+                .take()
+                .map(|mut worker| worker.stop_and_wait(Duration::from_millis(750)));
+            finish_startup_failure(
+                &state,
+                retry,
+                StartupFailure::Runtime,
+                "the dedicated transcription worker failed its startup check",
+            );
+            return;
+        }
+    }
+    *state
+        .transcription_worker
+        .lock()
+        .expect("transcription worker process lock") = Some(transcription_worker);
     *state.runtime.lock().expect("runtime identity lock") = Some(runtime.clone());
     let mut model = state.model.lock().expect("application model lock");
-    model.admission = runtime.admission;
+    model.admission = runtime.admission.clone();
     model.startup_message = "Finishing your private workspace.".into();
     if let Some(projection) = restored_transcript
         && let Err(error) = apply_restored_transcript_projection(&mut model, projection)
@@ -5646,6 +6740,8 @@ fn initialize_application(app: AppHandle, retry: bool) {
     } else {
         model.startup_message = "Yawn is ready.".into();
     }
+    drop(model);
+    start_transcription_queue_executor(&app, &storage_context.storage, &runtime);
 }
 
 enum StartupFailure {
@@ -5741,48 +6837,11 @@ fn start_retention_executor(app: &AppHandle, context: &StorageContext) {
         loop {
             std::thread::sleep(Duration::from_secs(30));
             let state = app.state::<ApplicationState>();
-            let coordination = match state.meeting_storage_coordination() {
-                Ok(coordination) => coordination,
-                Err(_) => {
-                    let _ = write_private_diagnostic(
-                        &diagnostics,
-                        "retention_coordination_failed",
-                        "meeting storage coordination is unavailable",
-                    );
-                    mark_retention_unavailable(&state);
-                    continue;
-                }
-            };
-            let storage_sequence = match coordination.lock_sequence() {
-                Ok(sequence) => sequence,
-                Err(_) => {
-                    let _ = write_private_diagnostic(
-                        &diagnostics,
-                        "retention_coordination_failed",
-                        "meeting storage sequence lock is unavailable",
-                    );
-                    mark_retention_unavailable(&state);
-                    continue;
-                }
-            };
-            let active_meetings = match storage_sequence.active_meeting_ids() {
-                Ok(active) => active,
-                Err(_) => {
-                    drop(storage_sequence);
-                    let _ = write_private_diagnostic(
-                        &diagnostics,
-                        "retention_coordination_failed",
-                        "active meeting registry is unavailable",
-                    );
-                    mark_retention_unavailable(&state);
-                    continue;
-                }
-            };
             let retention_result =
-                execute_due_retention_excluding(&storage, now_epoch_seconds(), &active_meetings);
-            drop(storage_sequence);
+                execute_scheduled_retention(&state, &storage, now_epoch_seconds());
             match retention_result {
-                Ok(outcomes) => {
+                Ok(None) => {}
+                Ok(Some(outcomes)) => {
                     let mut retention_failed = false;
                     for outcome in outcomes {
                         if let RetentionOutcome::Quarantined(meeting_id) = outcome {
@@ -5802,17 +6861,92 @@ fn start_retention_executor(app: &AppHandle, context: &StorageContext) {
                         mark_retention_unavailable(&state);
                     }
                 }
-                Err(error) => {
+                Err(ScheduledRetentionError::Coordination(message)) => {
+                    let _ = write_private_diagnostic(
+                        &diagnostics,
+                        "retention_coordination_failed",
+                        message,
+                    );
+                    mark_retention_unavailable(&state);
+                }
+                Err(ScheduledRetentionError::Retention) => {
                     let _ = write_private_diagnostic(
                         &diagnostics,
                         "retention_tick_failed",
-                        &error.to_string(),
+                        "scheduled retained-audio release could not complete",
                     );
                     mark_retention_unavailable(&state);
                 }
             }
         }
     });
+}
+
+#[derive(Debug)]
+enum ScheduledRetentionError {
+    Coordination(&'static str),
+    Retention,
+}
+
+/// Runs one scheduled retention pass under the same first-tier command lock
+/// as playback launch and explicit deletion. A live owned child defers the
+/// whole pass before it can acquire the storage sequence; a completed child is
+/// reaped before the pass continues. The order is deliberately `command_lock`,
+/// playback slot, then meeting-storage sequence; no storage lock is held while
+/// acquiring an earlier tier.
+fn execute_scheduled_retention(
+    state: &ApplicationState,
+    storage: &StorageRoot,
+    now: u64,
+) -> Result<Option<Vec<RetentionOutcome>>, ScheduledRetentionError> {
+    let _command = state
+        .command_lock
+        .lock()
+        .map_err(|_| ScheduledRetentionError::Coordination("command lock is unavailable"))?;
+    if scheduled_retention_playback_is_active(state)? {
+        return Ok(None);
+    }
+
+    let coordination = state.meeting_storage_coordination().map_err(|_| {
+        ScheduledRetentionError::Coordination("meeting storage coordination is unavailable")
+    })?;
+    let storage_sequence = coordination.lock_sequence().map_err(|_| {
+        ScheduledRetentionError::Coordination("meeting storage sequence lock is unavailable")
+    })?;
+    let active_meetings = storage_sequence.active_meeting_ids().map_err(|_| {
+        ScheduledRetentionError::Coordination("active meeting registry is unavailable")
+    })?;
+
+    execute_due_retention_excluding(storage, now, &active_meetings)
+        .map(Some)
+        .map_err(|_| ScheduledRetentionError::Retention)
+}
+
+/// Polls only Yawn's retained child while the command lock is held. A live
+/// child keeps the reviewed artifact in place; an exited or failed child is
+/// reaped before retention obtains storage authority.
+fn scheduled_retention_playback_is_active(
+    state: &ApplicationState,
+) -> Result<bool, ScheduledRetentionError> {
+    let mut slot = state.audio_playback.lock().map_err(|_| {
+        ScheduledRetentionError::Coordination("retained-audio playback is unavailable")
+    })?;
+    let Some(playback) = slot.as_mut() else {
+        return Ok(false);
+    };
+    match playback.poll() {
+        Ok(true) => Ok(true),
+        Ok(false) => {
+            slot.take();
+            Ok(false)
+        }
+        Err(_) => {
+            if let Some(mut playback) = slot.take() {
+                playback.stop_and_reap();
+            }
+            Ok(false)
+        }
+    }
 }
 
 fn mark_retention_unavailable(state: &ApplicationState) {
@@ -6369,140 +7503,83 @@ fn run_capture_task(
         );
         return;
     }
-    {
-        let mut model = state.model.lock().expect("application model lock");
-        if transition_capture(&mut model, CaptureState::Captured).is_err()
-            || transition_capture(&mut model, CaptureState::Transcribing).is_err()
-        {
-            drop(model);
+    let runtime = state
+        .runtime
+        .lock()
+        .expect("runtime identity lock")
+        .clone()
+        .ok_or_else(|| "verified runtime identity is unavailable".to_string());
+    let storage = state
+        .storage
+        .lock()
+        .expect("storage context lock")
+        .as_ref()
+        .map(|context| context.storage.clone())
+        .ok_or_else(|| "private storage is unavailable".to_string());
+    let request = match (runtime, storage) {
+        (Ok(runtime), Ok(_storage)) => {
+            let meeting = load_meeting(&attempt.meeting_dir).map_err(error_text);
+            match meeting {
+                Ok(meeting) => TranscriptionRequest {
+                    schema: local_meeting_notes_session_core::transcription_queue::TranscriptionRequestSchema::V1,
+                    request_id: Uuid::new_v4(),
+                    meeting_id: meeting_id.clone(),
+                    capture_session_sha256: meeting.artifacts.capture_session.as_ref().unwrap().sha256.clone(),
+                    microphone_audio_sha256: meeting.artifacts.microphone_audio.as_ref().unwrap().sha256.clone(),
+                    system_audio_sha256: meeting.artifacts.system_audio.as_ref().unwrap().sha256.clone(),
+                    model_identity: runtime.transcript_model_identity.clone(),
+                    worker_runtime_identity: runtime.worker_executable_sha256.clone(),
+                    enqueued_at_epoch_seconds: now_epoch_seconds(),
+                },
+                Err(error) => {
+                    fail_capture_task(&app, Some(&meeting_id), false, true, "transcription_queue_meeting_load_failed", &error, "The capture could not be queued for local transcription.");
+                    return;
+                }
+            }
+        }
+        (Err(error), _) | (_, Err(error)) => {
             fail_capture_task(
                 &app,
                 Some(&meeting_id),
                 false,
                 true,
-                "capture_processing_transition_failed",
-                "application state changed before transcription",
-                "The captured meeting could not enter transcription.",
-            );
-            return;
-        }
-    }
-
-    let transcript_result = request_worker(
-        &state,
-        Operation::TranscriptCreate,
-        json!({"meeting_id": meeting_id}),
-        TRANSCRIPT_REQUEST_TIMEOUT,
-    );
-    let transcript_digests = match transcript_result {
-        Ok(result) => match exact_digests(&result, &["transcript"]) {
-            Ok(digests) => digests,
-            Err(error) => {
-                finish_transcription_failure(
-                    &app,
-                    &attempt.meeting_dir,
-                    &meeting_id,
-                    false,
-                    "transcript_digest_set_invalid",
-                    &error,
-                    "The transcript result could not be verified.",
-                );
-                return;
-            }
-        },
-        Err(error) => {
-            finish_transcription_failure(
-                &app,
-                &attempt.meeting_dir,
-                &meeting_id,
-                error.is_supervisor(),
-                "transcript_worker_failed",
-                &error.to_string(),
-                "The offline transcript could not be created.",
-            );
-            return;
-        }
-    };
-    let transcript_digest = &transcript_digests["transcript"];
-    let transcript_reference = match verified_artifact(
-        &attempt.meeting_dir,
-        &format!("transcript/{transcript_digest}.json"),
-        transcript_digest,
-    ) {
-        Ok(reference) => reference,
-        Err(error) => {
-            finish_transcription_failure(
-                &app,
-                &attempt.meeting_dir,
-                &meeting_id,
-                false,
-                "transcript_artifact_invalid",
+                "transcription_queue_context_missing",
                 &error,
-                "The transcript file did not match its verified identity.",
+                "The capture could not be queued for local transcription.",
             );
             return;
         }
     };
-    let (turns, warnings) = match load_transcript_projection(
-        &attempt.meeting_dir,
-        &meeting_id,
-        &transcript_reference,
-    ) {
-        Ok(projection) => projection,
-        Err(error) => {
-            finish_transcription_failure(
-                &app,
-                &attempt.meeting_dir,
-                &meeting_id,
-                false,
-                "transcript_projection_invalid",
-                &error,
-                "The transcript could not be displayed safely.",
-            );
-            return;
-        }
-    };
-    let mut meeting = match load_meeting(&attempt.meeting_dir) {
-        Ok(meeting) => meeting,
-        Err(error) => {
-            finish_transcription_failure(
-                &app,
-                &attempt.meeting_dir,
-                &meeting_id,
-                true,
-                "transcript_meeting_load_failed",
-                &error.to_string(),
-                "The transcript could not be attached to its meeting.",
-            );
-            return;
-        }
-    };
-    meeting.lifecycle = MeetingLifecycle::TranscriptReady;
-    let current_transcript_sha256 = transcript_reference.sha256.clone();
-    meeting.artifacts.current_transcript = Some(transcript_reference);
-    if let Err(error) = write_meeting(&attempt.meeting_dir, &meeting) {
-        finish_transcription_failure(
+    let storage = state
+        .storage
+        .lock()
+        .expect("storage context lock")
+        .as_ref()
+        .unwrap()
+        .storage
+        .clone();
+    if let Err(error) = TranscriptionQueue::open(&storage).and_then(|queue| queue.enqueue(request))
+    {
+        fail_capture_task(
             &app,
-            &attempt.meeting_dir,
-            &meeting_id,
+            Some(&meeting_id),
+            false,
             true,
-            "transcript_meeting_commit_failed",
+            "transcription_queue_enqueue_failed",
             &error.to_string(),
-            "The transcript could not be attached to its meeting.",
+            "The capture could not be queued for local transcription.",
         );
         return;
     }
     {
         let mut model = state.model.lock().expect("application model lock");
-        if transition_capture(&mut model, CaptureState::TranscriptReady).is_err() {
-            model.error = Some("The transcript was saved but its screen could not open.".into());
+        if transition_capture(&mut model, CaptureState::Captured).is_err()
+            || transition_capture(&mut model, CaptureState::Idle).is_err()
+        {
+            model.error =
+                Some("The capture was saved, but the recorder could not return to idle.".into());
         } else {
-            model.turns = turns;
-            model.current_transcript_sha256 = Some(current_transcript_sha256);
-            model.warnings = warnings;
-            model.error = None;
-            model.mic_state = None;
-            model.system_state = None;
+            model.clear_meeting_projection();
         }
     }
 }
@@ -6657,6 +7734,241 @@ fn request_worker(
         return Err(WorkerCallError::Rejected);
     }
     Ok(result.artifact_digests)
+}
+
+fn request_worker_on(
+    worker: Arc<Mutex<Option<OwnedChild>>>,
+    operation: Operation,
+    arguments: Value,
+    timeout: Duration,
+    mut heartbeat: impl FnMut(&WorkerProgress) -> Result<(), ProtocolError>,
+) -> Result<HashMap<String, String>, WorkerCallError> {
+    let port = product_coordinator::ProcessWorkerPort::new(worker);
+    let result: WorkerResult = port
+        .request_with_progress(operation, arguments, timeout, |progress| {
+            heartbeat(progress)
+        })
+        .map_err(|unavailable| WorkerCallError::Supervisor(unavailable.0))?;
+    if !result.ok {
+        return Err(WorkerCallError::Rejected);
+    }
+    Ok(result.artifact_digests)
+}
+
+fn start_transcription_queue_executor(
+    app: &AppHandle,
+    storage: &StorageRoot,
+    runtime: &RuntimeIdentity,
+) {
+    let state = app.state::<ApplicationState>();
+    let mut executor = state
+        .transcription_executor
+        .lock()
+        .expect("transcription executor lock");
+    if executor.is_some() {
+        return;
+    }
+    let app = app.clone();
+    let storage = storage.clone();
+    let runtime = runtime.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = stop.clone();
+    let handle = match std::thread::Builder::new()
+        .name("background-transcription-queue".into())
+        .spawn(move || loop {
+            if thread_stop.load(Ordering::SeqCst) { break; }
+            let state = app.state::<ApplicationState>();
+            let queue = match TranscriptionQueue::open(&storage) {
+                Ok(queue) => queue,
+                Err(error) => {
+                    write_diagnostic(&state, "transcription_queue_open_failed", &error.to_string());
+                    std::thread::sleep(Duration::from_millis(250));
+                    continue;
+                }
+            };
+            let item = match recover_transcription_queue(&state, &storage, &runtime, &queue) {
+                Ok(discovery) => {
+                    let eligible = discovery
+                        .items
+                        .into_iter()
+                        .filter(queue_item_is_eligible)
+                        .collect::<Vec<_>>();
+                    let queued_count = eligible.len();
+                    let item = eligible.into_iter().next();
+                    if let Ok(mut model) = state.model.lock() {
+                        model.background_transcription_queued_count = queued_count;
+                        model.background_transcription_active = item.is_some();
+                    }
+                    item
+                }
+                Err(error) => {
+                    write_diagnostic(&state, "transcription_queue_recovery_failed", &error);
+                    std::thread::sleep(Duration::from_millis(250));
+                    continue;
+                }
+            };
+            let Some(item) = item else {
+                std::thread::sleep(Duration::from_millis(250));
+                continue;
+            };
+            let request_id = item.request.request_id;
+            let claim = match queue.claim(request_id, runtime.worker_executable_sha256.clone(), now_epoch_seconds()) {
+                Ok(item) => item.claim,
+                Err(error) => {
+                    write_diagnostic(&state, "transcription_queue_claim_failed", &error.to_string());
+                    continue;
+                }
+            };
+            let Some(claim) = claim else { continue };
+            let expected_meeting = match Uuid::parse_str(&item.request.meeting_id) {
+                Ok(id) => id,
+                Err(_) => {
+                    let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds());
+                    continue;
+                }
+            };
+            let worker = state.transcription_worker.clone();
+            let worker_request_id = Arc::new(Mutex::new(None::<Uuid>));
+            let heartbeat_id = worker_request_id.clone();
+            let result = request_worker_on(
+                worker,
+                Operation::TranscriptCreate,
+                json!({"meeting_id": item.request.meeting_id}),
+                TRANSCRIPT_REQUEST_TIMEOUT,
+                |progress| {
+                    if progress.event != ProgressEvent::CaptureState || progress.state != CaptureProgressState::Transcribing || progress.meeting_id != expected_meeting {
+                        return Err(ProtocolError::InvalidEvent);
+                    }
+                    let mut id = heartbeat_id.lock().map_err(|_| ProtocolError::InvalidEvent)?;
+                    if let Some(existing) = *id {
+                        if existing != progress.request_id { return Err(ProtocolError::InvalidEvent); }
+                    } else { *id = Some(progress.request_id); }
+                    Ok(())
+                },
+            );
+            match result {
+                Ok(digests) => {
+                    let digest = match exact_digests(&digests, &["transcript"]) { Ok(digests) => digests["transcript"].clone(), Err(error) => { let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds()); write_diagnostic(&state, "transcription_queue_digest_invalid", &error); continue; } };
+                    let meeting_dir = match storage.resolve(Path::new("meetings").join(&item.request.meeting_id).as_path()) { Ok(path) => path, Err(_) => { let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds()); continue; } };
+                    let reference = match verified_artifact(&meeting_dir, &format!("transcript/{digest}.json"), &digest) { Ok(reference) => reference, Err(error) => { let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds()); write_diagnostic(&state, "transcription_queue_artifact_invalid", &error); continue; } };
+                    if let Err(error) = load_transcript_projection(&meeting_dir, &item.request.meeting_id, &reference) {
+                        let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds());
+                        write_diagnostic(&state, "transcription_queue_projection_invalid", &error);
+                        continue;
+                    }
+                    let path = match resolve_artifact(&meeting_dir, &reference.relative_path) { Ok(path) => path, Err(_) => { let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds()); continue; } };
+                    let bytes = match read_private_bytes(&path, TRANSCRIPT_MAX_BYTES) { Ok(bytes) => bytes, Err(_) => { let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds()); continue; } };
+                    if queue.admit_result(request_id, &bytes, reference, now_epoch_seconds()).is_err() || queue.commit(request_id, now_epoch_seconds()).is_err() {
+                        let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds());
+                    }
+                }
+                Err(WorkerCallError::Rejected) => { let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Failed, now_epoch_seconds()); }
+                Err(WorkerCallError::Supervisor(_)) => { let _ = queue.release_claim(request_id, claim.claim_id, now_epoch_seconds()); }
+            }
+        }) {
+        Ok(handle) => handle,
+        Err(error) => {
+            write_diagnostic(&state, "transcription_executor_spawn_failed", &error.to_string());
+            return;
+        }
+    };
+    *executor = Some(TranscriptionExecutorControl { stop, handle });
+}
+
+fn recover_transcription_queue(
+    state: &ApplicationState,
+    storage: &StorageRoot,
+    runtime: &RuntimeIdentity,
+    queue: &TranscriptionQueue<'_>,
+) -> Result<local_meeting_notes_session_core::transcription_queue::QueueDiscovery, String> {
+    let discovery = queue.discover().map_err(|error| error.to_string())?;
+    for item in &discovery.items {
+        if item.terminal.is_some() {
+            continue;
+        }
+        if let Some(claim) = &item.claim {
+            queue
+                .release_claim(item.request.request_id, claim.claim_id, now_epoch_seconds())
+                .map_err(|error| error.to_string())?;
+        }
+        if queue_item_is_repairable(item) {
+            let meeting_dir = storage
+                .resolve(
+                    Path::new("meetings")
+                        .join(&item.request.meeting_id)
+                        .as_path(),
+                )
+                .map_err(error_text)?;
+            let reference = item.result.as_ref().unwrap().transcript.clone();
+            if load_transcript_projection(&meeting_dir, &item.request.meeting_id, &reference)
+                .is_ok()
+            {
+                queue
+                    .commit(item.request.request_id, now_epoch_seconds())
+                    .map_err(|error| error.to_string())?;
+            } else {
+                let _ = queue.fail(item.request.request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds());
+                write_diagnostic(
+                    state,
+                    "transcription_queue_projection_invalid",
+                    "stored transcript projection could not be revalidated",
+                );
+            }
+        }
+    }
+    let discovery = queue.discover().map_err(|error| error.to_string())?;
+    for meeting_id in discovery.orphan_captured_meetings {
+        let meeting_dir = storage
+            .resolve(Path::new("meetings").join(&meeting_id).as_path())
+            .map_err(error_text)?;
+        let meeting = load_meeting(&meeting_dir).map_err(error_text)?;
+        let request = TranscriptionRequest {
+            schema: local_meeting_notes_session_core::transcription_queue::TranscriptionRequestSchema::V1,
+            request_id: Uuid::new_v4(),
+            meeting_id: meeting_id.clone(),
+            capture_session_sha256: meeting.artifacts.capture_session.as_ref().ok_or_else(|| "captured meeting has no session artifact".to_string())?.sha256.clone(),
+            microphone_audio_sha256: meeting.artifacts.microphone_audio.as_ref().ok_or_else(|| "captured meeting has no microphone artifact".to_string())?.sha256.clone(),
+            system_audio_sha256: meeting.artifacts.system_audio.as_ref().ok_or_else(|| "captured meeting has no system artifact".to_string())?.sha256.clone(),
+            model_identity: runtime.transcript_model_identity.clone(),
+            worker_runtime_identity: runtime.worker_executable_sha256.clone(),
+            enqueued_at_epoch_seconds: now_epoch_seconds(),
+        };
+        queue.enqueue(request).map_err(|error| error.to_string())?;
+    }
+    queue.discover().map_err(|error| error.to_string())
+}
+
+fn queue_item_is_repairable(
+    item: &local_meeting_notes_session_core::transcription_queue::TranscriptionQueueItem,
+) -> bool {
+    item.terminal.is_none() && item.result.is_some() && item.commit.is_none()
+}
+
+fn queue_item_is_eligible(
+    item: &local_meeting_notes_session_core::transcription_queue::TranscriptionQueueItem,
+) -> bool {
+    item.terminal.is_none()
+        && item.result.is_none()
+        && item.commit.is_none()
+        && item.claim.is_none()
+}
+
+fn stop_transcription_queue_executor(state: &ApplicationState) {
+    let control = state
+        .transcription_executor
+        .lock()
+        .expect("transcription executor lock")
+        .take();
+    if let Some(control) = control {
+        control.stop.store(true, Ordering::SeqCst);
+        if control.handle.join().is_err() {
+            write_diagnostic(
+                state,
+                "transcription_executor_join_failed",
+                "background transcription executor did not stop cleanly",
+            );
+        }
+    }
 }
 
 fn record_transcription_heartbeat(
@@ -6899,6 +8211,23 @@ fn load_transcript_projection(
     meeting_id: &str,
     reference: &ArtifactRef,
 ) -> Result<(Vec<TranscriptTurn>, Vec<String>), String> {
+    load_transcript_projection_with_corrections(meeting_dir, meeting_id, reference, true)
+}
+
+fn load_transcript_projection_without_corrections(
+    meeting_dir: &Path,
+    meeting_id: &str,
+    reference: &ArtifactRef,
+) -> Result<(Vec<TranscriptTurn>, Vec<String>), String> {
+    load_transcript_projection_with_corrections(meeting_dir, meeting_id, reference, false)
+}
+
+fn load_transcript_projection_with_corrections(
+    meeting_dir: &Path,
+    meeting_id: &str,
+    reference: &ArtifactRef,
+    apply_speaker_corrections: bool,
+) -> Result<(Vec<TranscriptTurn>, Vec<String>), String> {
     let actual = artifact_ref(meeting_dir, &reference.relative_path).map_err(error_text)?;
     if &actual != reference {
         return Err("retained transcript no longer matches its meeting record".into());
@@ -6908,7 +8237,13 @@ fn load_transcript_projection(
     if format!("{:x}", Sha256::digest(&bytes)) != reference.sha256 {
         return Err("retained transcript bytes changed while opening".into());
     }
-    project_current_transcript(meeting_dir, meeting_id, reference, &bytes)
+    project_current_transcript(
+        meeting_dir,
+        meeting_id,
+        reference,
+        &bytes,
+        apply_speaker_corrections,
+    )
 }
 
 /// Projects the meeting's current transcript pointer whether it names a base
@@ -6920,6 +8255,7 @@ fn project_current_transcript(
     meeting_id: &str,
     reference: &ArtifactRef,
     bytes: &[u8],
+    apply_speaker_corrections: bool,
 ) -> Result<(Vec<TranscriptTurn>, Vec<String>), String> {
     let is_view = serde_json::from_slice::<serde_json::Value>(bytes)
         .ok()
@@ -6931,24 +8267,45 @@ fn project_current_transcript(
         })
         .as_deref()
         == Some("transcript-view/1");
-    if !is_view {
-        return parse_transcript_projection_with(bytes, &BTreeSet::new());
-    }
     let meeting_uuid = Uuid::parse_str(meeting_id).map_err(error_text)?;
-    let resolved = resolve_stored_transcript_primed(
-        meeting_dir,
-        meeting_uuid,
-        &reference.sha256,
-        bytes.to_vec(),
-    )
-    .map_err(error_text)?;
-    let restored: BTreeSet<u32> = resolved
-        .inspection
-        .restored_source_turn_indices
-        .iter()
-        .copied()
-        .collect();
-    parse_transcript_projection_with(&resolved.base_bytes, &restored)
+    let (mut turns, mut warnings) = if !is_view {
+        parse_transcript_projection_with(bytes, &BTreeSet::new())?
+    } else {
+        let resolved = resolve_stored_transcript_primed(
+            meeting_dir,
+            meeting_uuid,
+            &reference.sha256,
+            bytes.to_vec(),
+        )
+        .map_err(error_text)?;
+        let restored: BTreeSet<u32> = resolved
+            .inspection
+            .restored_source_turn_indices
+            .iter()
+            .copied()
+            .collect();
+        parse_transcript_projection_with(&resolved.base_bytes, &restored)?
+    };
+    if !apply_speaker_corrections {
+        return Ok((turns, warnings));
+    }
+    match speaker_correction::current_labels(meeting_dir, meeting_uuid, &reference.sha256) {
+        Ok(labels) => {
+            for turn in &mut turns {
+                if turn.withheld {
+                    continue;
+                }
+                if let Some(replacement) = labels.get(&turn.source_speaker) {
+                    turn.speaker = Some(replacement.clone());
+                    turn.speaker_corrected = true;
+                }
+            }
+        }
+        Err(()) => warnings.push(
+            "Saved speaker corrections could not be read. Source speaker labels are shown.".into(),
+        ),
+    }
+    Ok((turns, warnings))
 }
 
 fn parse_transcript_projection_with(
@@ -6994,16 +8351,21 @@ fn parse_transcript_projection_with(
             gated += 1;
             turns.push(TranscriptTurn {
                 source_turn_index: source_turn_index as u32,
+                source_speaker: None,
                 speaker: None,
+                speaker_corrected: false,
                 start: turn.start,
                 text: String::new(),
                 withheld: true,
             });
             continue;
         }
+        let source_speaker = if unattributed { None } else { turn.speaker };
         turns.push(TranscriptTurn {
             source_turn_index: source_turn_index as u32,
-            speaker: if unattributed { None } else { turn.speaker },
+            speaker: source_speaker.clone(),
+            source_speaker,
+            speaker_corrected: false,
             start: turn.start,
             text: turn.text,
             withheld: false,
@@ -7013,7 +8375,10 @@ fn parse_transcript_projection_with(
     let report = document.voiceprint.filter(|report| report.applied);
     // First, and before the count, because it is the only one of these that says
     // a person was removed rather than that some audio was.
-    if report.as_ref().is_some_and(|report| report.persistent_other) {
+    if report
+        .as_ref()
+        .is_some_and(|report| report.persistent_other)
+    {
         // The recurring voice's own seconds, not the gate's total. Dropped
         // rather than approximated when either factor is missing, the same way
         // the enrolment basis below is dropped rather than invented.
@@ -7438,6 +8803,117 @@ mod tests {
         (temporary, storage)
     }
 
+    #[test]
+    fn retained_audio_stdin_handoff_survives_exec_with_close_on_exec_input() {
+        let temporary = TempDir::new().unwrap();
+        let wav = temporary.path().join("synthetic.wav");
+        // A minimal synthetic WAV prefix is enough for this spawn-level test;
+        // no meeting recording is read or played.
+        fs::write(&wav, b"RIFF\x24\0\0\0WAVEfmt ").unwrap();
+        let file = File::open(wav).unwrap();
+        let input = file.try_clone().unwrap();
+        set_close_on_exec(input.as_raw_fd(), true).unwrap();
+        let output = Command::new("/bin/sh")
+            .args(["-c", "dd bs=4 count=1 </dev/stdin 2>/dev/null"])
+            .stdin(Stdio::from(input))
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"RIFF");
+    }
+
+    #[test]
+    fn scheduled_retention_defers_active_playback_then_releases_after_stop() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = "due-playback";
+        write_transcript_fixture(&storage, meeting_id, 0, AudioState::Retained, "synthetic");
+        let directory = meeting_dir(&storage, meeting_id).unwrap();
+        let mut meeting = load_meeting(&directory).unwrap();
+        meeting.retention.next_deletion_at_epoch_seconds = Some(1);
+        write_meeting(&directory, &meeting).unwrap();
+
+        let state = ApplicationState::default();
+        *state.app_data_writer_lock.lock().unwrap() =
+            Some(Arc::new(acquire_app_data_writer_lock(&storage).unwrap()));
+        let playback_pid = directory.join("playback.pid");
+        let child = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "echo $$ > \"$1\"; exec sleep 30",
+                "retained-audio-test",
+                playback_pid.to_str().unwrap(),
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        for _ in 0..100 {
+            if playback_pid.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pid: libc::pid_t = fs::read_to_string(&playback_pid)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        *state.audio_playback.lock().unwrap() = Some(RetainedAudioPlayback {
+            child,
+            source: library_reader::RetainedAudioSource::Microphone,
+        });
+
+        assert_eq!(
+            execute_scheduled_retention(&state, &storage, 1).unwrap(),
+            None
+        );
+        assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+        assert!(directory.join("capture/mic.wav").exists());
+        assert!(directory.join("capture/system.wav").exists());
+        assert_eq!(
+            load_meeting(&directory).unwrap().retention.state,
+            AudioState::Retained
+        );
+
+        stop_owned_audio_playback(&state);
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
+
+        let outcomes = execute_scheduled_retention(&state, &storage, 1)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            outcomes,
+            vec![RetentionOutcome::AudioReleased(meeting_id.into())]
+        );
+        assert!(state.audio_playback.lock().unwrap().is_none());
+        assert!(!directory.join("capture/mic.wav").exists());
+        assert!(!directory.join("capture/system.wav").exists());
+    }
+
+    #[test]
+    fn owned_audio_playback_reports_completion_once_then_reaps_its_child() {
+        let state = ApplicationState::default();
+        let child = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        *state.audio_playback.lock().unwrap() = Some(RetainedAudioPlayback {
+            child,
+            source: library_reader::RetainedAudioSource::Microphone,
+        });
+        std::thread::sleep(Duration::from_millis(10));
+        assert_eq!(owned_audio_playback_status(&state).state, "completed");
+        assert_eq!(owned_audio_playback_status(&state).state, "idle");
+    }
+
     fn storage_tree_bytes(path: &Path) -> Vec<(String, Vec<u8>)> {
         fn visit(root: &Path, path: &Path, entries: &mut Vec<(String, Vec<u8>)>) {
             let mut children = fs::read_dir(path)
@@ -7631,6 +9107,7 @@ mod tests {
             admission: "internal-alpha".into(),
             worker_build_sha256: "worker-build".into(),
             worker_executable_sha256: "worker-executable".into(),
+            transcript_model_identity: "model/v1".into(),
             tap_build_sha256: "tap-build".into(),
             tap_path: PathBuf::from("/nonexistent/tap"),
             packaged_models: Vec::new(),
@@ -7744,10 +9221,7 @@ mod tests {
     #[test]
     fn tray_states_never_read_as_silently_recording() {
         use StartupState::*;
-        assert_eq!(
-            tray_presentation(Ready, CaptureState::Idle, false).0,
-            "○"
-        );
+        assert_eq!(tray_presentation(Ready, CaptureState::Idle, false).0, "○");
         assert_eq!(
             tray_presentation(Ready, CaptureState::Recording, false).0,
             "●"
@@ -7785,7 +9259,10 @@ mod tests {
             tray_presentation(Ready, CaptureState::RecoveredInterrupted, false).0,
             "×"
         );
-        assert_eq!(tray_presentation(Checking, CaptureState::Idle, false).0, "○");
+        assert_eq!(
+            tray_presentation(Checking, CaptureState::Idle, false).0,
+            "○"
+        );
         assert_eq!(
             tray_presentation(RuntimeMissing, CaptureState::Idle, false).0,
             "×"
@@ -7815,6 +9292,7 @@ mod tests {
             admission: "internal-alpha".into(),
             worker_build_sha256: "worker-build".into(),
             worker_executable_sha256: "worker-executable".into(),
+            transcript_model_identity: "model/v1".into(),
             tap_build_sha256: "tap-build".into(),
             tap_path: PathBuf::from("/nonexistent/tap"),
             packaged_models: Vec::new(),
@@ -7944,7 +9422,7 @@ mod tests {
                 sender,
             )
             .unwrap_err()
-                .contains("installation check")
+            .contains("installation check")
         );
         {
             let mut model = state.model.lock().unwrap();
@@ -7971,6 +9449,7 @@ mod tests {
             admission: "internal-alpha".into(),
             worker_build_sha256: "worker-build".into(),
             worker_executable_sha256: "worker-executable".into(),
+            transcript_model_identity: "model/v1".into(),
             tap_build_sha256: "tap-build".into(),
             tap_path: PathBuf::from("/nonexistent/tap"),
             packaged_models: Vec::new(),
@@ -8675,6 +10154,41 @@ mod tests {
     }
 
     #[test]
+    fn completed_meeting_enters_the_library_after_its_active_lease_ends() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = Uuid::new_v4().to_string();
+        write_transcript_fixture(
+            &storage,
+            &meeting_id,
+            10,
+            AudioState::Retained,
+            "completed meeting words",
+        );
+        let coordination = MeetingStorageCoordination::default();
+        let active = coordination.acquire(&meeting_id).unwrap();
+
+        with_meeting_storage_sequence(&coordination, |active_meeting_ids| {
+            let mut reader =
+                library_reader::LibraryReader::rebuild(storage.clone(), active_meeting_ids)
+                    .expect("the active meeting is excluded without breaking the library");
+            assert!(reader.snapshot(active_meeting_ids).rows.is_empty());
+        })
+        .unwrap();
+
+        drop(active);
+
+        with_meeting_storage_sequence(&coordination, |active_meeting_ids| {
+            let mut reader =
+                library_reader::LibraryReader::rebuild(storage.clone(), active_meeting_ids)
+                    .expect("the completed meeting is readable after capture releases it");
+            let snapshot = reader.snapshot(active_meeting_ids);
+            assert_eq!(snapshot.rows.len(), 1);
+            assert_eq!(snapshot.rows[0].meeting_id, meeting_id);
+        })
+        .unwrap();
+    }
+
+    #[test]
     fn app_data_writer_lock_is_exclusive_and_released_with_its_file() {
         let (_temporary, storage) = test_storage();
         let held = acquire_app_data_writer_lock(&storage).unwrap();
@@ -9232,6 +10746,343 @@ mod tests {
         assert_eq!(warnings.len(), 1);
     }
 
+    #[test]
+    fn speaker_correction_projects_over_matching_turns_without_changing_source_identity() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = Uuid::new_v4();
+        let transcript_path = write_transcript_fixture_with_turns(
+            &storage,
+            &meeting_id.to_string(),
+            10,
+            AudioState::Retained,
+            json!([
+                {"start": 0.0, "end": 1.0, "speaker": "Me", "text": "first"},
+                {"start": 1.0, "end": 2.0, "speaker": "Them", "text": "second"},
+                {"start": 2.0, "end": 3.0, "speaker": "Them", "text": "third"}
+            ]),
+        );
+        let directory = transcript_path.parent().unwrap().parent().unwrap();
+        let meeting = load_meeting(directory).unwrap();
+        let reference = meeting.artifacts.current_transcript.unwrap();
+        speaker_correction::append(
+            directory,
+            meeting_id,
+            speaker_correction::SpeakerCorrectionOperation {
+                operation_id: Uuid::new_v4(),
+                source_transcript_sha256: reference.sha256.clone(),
+                source_speaker: Some("Them".into()),
+                replacement: "Alex".into(),
+                applied_at_epoch_seconds: 11,
+            },
+        )
+        .unwrap();
+
+        let (turns, warnings) =
+            load_transcript_projection(directory, &meeting_id.to_string(), &reference).unwrap();
+        assert!(warnings.is_empty());
+        assert_eq!(turns[0].speaker.as_deref(), Some("Me"));
+        assert!(!turns[0].speaker_corrected);
+        assert_eq!(turns[1].speaker.as_deref(), Some("Alex"));
+        assert_eq!(turns[2].speaker.as_deref(), Some("Alex"));
+        assert_eq!(turns[1].source_speaker.as_deref(), Some("Them"));
+        assert_eq!(turns[2].source_speaker.as_deref(), Some("Them"));
+        assert!(turns[1].speaker_corrected && turns[2].speaker_corrected);
+        let (candidate_turns, candidate_warnings) = load_transcript_projection_without_corrections(
+            directory,
+            &meeting_id.to_string(),
+            &reference,
+        )
+        .unwrap();
+        assert!(candidate_warnings.is_empty());
+        assert_eq!(candidate_turns[1].speaker.as_deref(), Some("Them"));
+        assert!(!candidate_turns[1].speaker_corrected);
+        let source_bytes = fs::read(transcript_path).unwrap();
+        assert!(
+            String::from_utf8(source_bytes)
+                .unwrap()
+                .contains("\"speaker\": \"Them\"")
+        );
+    }
+
+    #[test]
+    fn speaker_correction_command_saves_reopens_and_can_restore_the_source_label() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = Uuid::new_v4();
+        let transcript_path = write_transcript_fixture_with_turns(
+            &storage,
+            &meeting_id.to_string(),
+            10,
+            AudioState::Retained,
+            json!([
+                {"start": 0.0, "end": 1.0, "speaker": "Me", "text": "first"},
+                {"start": 1.0, "end": 2.0, "speaker": "Them", "text": "second"},
+                {"start": 2.0, "end": 3.0, "speaker": "Them", "text": "third"}
+            ]),
+        );
+        let directory = transcript_path.parent().unwrap().parent().unwrap();
+        let reference = load_meeting(directory)
+            .unwrap()
+            .artifacts
+            .current_transcript
+            .unwrap();
+        let state = ApplicationState::default();
+        *state.storage.lock().unwrap() = Some(StorageContext {
+            storage: storage.clone(),
+            resource_root: PathBuf::new(),
+            manifest_path: PathBuf::new(),
+            diagnostics: PathBuf::new(),
+        });
+        ensure_app_data_writer_lock(&state, &storage).unwrap();
+        {
+            let mut model = state.model.lock().unwrap();
+            transition_startup(&mut model, StartupState::Checking).unwrap();
+            transition_startup(&mut model, StartupState::Ready).unwrap();
+        }
+
+        let saved = correct_speaker_name_for(
+            meeting_id,
+            reference.sha256.clone(),
+            Some("Them".into()),
+            "Alex".into(),
+            &state,
+        )
+        .unwrap();
+        assert_eq!(saved.applied_turn_count, 2);
+        let (corrected, _) =
+            load_transcript_projection(directory, &meeting_id.to_string(), &reference).unwrap();
+        assert_eq!(corrected[1].speaker.as_deref(), Some("Alex"));
+        assert!(corrected[1].speaker_corrected);
+
+        correct_speaker_name_for(
+            meeting_id,
+            reference.sha256.clone(),
+            Some("Them".into()),
+            "Them".into(),
+            &state,
+        )
+        .unwrap();
+        let (restored, _) =
+            load_transcript_projection(directory, &meeting_id.to_string(), &reference).unwrap();
+        assert_eq!(restored[1].speaker.as_deref(), Some("Them"));
+        assert!(!restored[1].speaker_corrected);
+        assert!(
+            correct_speaker_name_for(
+                meeting_id,
+                "b".repeat(64),
+                Some("Them".into()),
+                "Taylor".into(),
+                &state,
+            )
+            .is_err()
+        );
+    }
+
+    fn vocabulary_command_state(storage: &StorageRoot) -> ApplicationState {
+        let state = ApplicationState::default();
+        *state.storage.lock().unwrap() = Some(StorageContext {
+            storage: storage.clone(),
+            resource_root: PathBuf::new(),
+            manifest_path: PathBuf::new(),
+            diagnostics: PathBuf::new(),
+        });
+        ensure_app_data_writer_lock(&state, storage).unwrap();
+        let mut model = state.model.lock().unwrap();
+        transition_startup(&mut model, StartupState::Checking).unwrap();
+        transition_startup(&mut model, StartupState::Ready).unwrap();
+        drop(model);
+        state
+    }
+
+    #[test]
+    fn local_vocabulary_commands_persist_exact_counts_without_rewriting_transcript_bytes() {
+        let (_temporary, storage) = test_storage();
+        let meeting_id = Uuid::new_v4();
+        let transcript_path = write_transcript_fixture_with_turns(
+            &storage,
+            &meeting_id.to_string(),
+            10,
+            AudioState::Retained,
+            json!([
+                {"start": 0.0, "end": 1.0, "speaker": "Me", "text": "Kibbel Report and Kibbel"},
+                {"start": 1.0, "end": 2.0, "speaker": "Me", "text": "Kibbel private", "gated": true, "gate_score": 0.1, "gate_reason": "fixture"}
+            ]),
+        );
+        let directory = transcript_path.parent().unwrap().parent().unwrap();
+        let reference = load_meeting(directory)
+            .unwrap()
+            .artifacts
+            .current_transcript
+            .unwrap();
+        let source_digest = sha256_file(&transcript_path).unwrap();
+        assert_eq!(source_digest, reference.sha256);
+        let state = vocabulary_command_state(&storage);
+
+        let first = local_vocabulary_add_for_test(
+            meeting_id,
+            &reference.sha256,
+            "Kibbel",
+            "Kibble",
+            &state,
+        )
+        .unwrap();
+        assert_eq!(first.entries.len(), 1);
+        assert_eq!(first.entries[0].applied_turn_count, 2);
+        let first_id = first.entries[0].id;
+
+        let overlapped = local_vocabulary_add_for_test(
+            meeting_id,
+            &reference.sha256,
+            "Kibbel Report",
+            "Kibble report",
+            &state,
+        )
+        .unwrap();
+        assert_eq!(overlapped.entries.len(), 2);
+        assert_eq!(
+            overlapped
+                .entries
+                .iter()
+                .find(|entry| entry.id == first_id)
+                .unwrap()
+                .applied_turn_count,
+            1
+        );
+        let second_id = overlapped.entries[1].id;
+        assert_eq!(overlapped.entries[1].applied_turn_count, 1);
+
+        // A fresh process reads the same private store and re-derives the
+        // count from the immutable, digest-bound projection.
+        drop(state);
+        let restarted = vocabulary_command_state(&storage);
+        let after_restart =
+            local_vocabulary_list_for_test(meeting_id, &reference.sha256, &restarted).unwrap();
+        assert_eq!(after_restart.entries.len(), 2);
+        assert_eq!(after_restart.entries[1].applied_turn_count, 1);
+
+        let edited = local_vocabulary_edit_for_test(
+            meeting_id,
+            &reference.sha256,
+            second_id,
+            "Report",
+            "Brief",
+            &restarted,
+        )
+        .unwrap();
+        assert_eq!(edited.entries[0].applied_turn_count, 2);
+        assert_eq!(edited.entries[1].applied_turn_count, 1);
+        let disabled = local_vocabulary_set_enabled_for_test(
+            meeting_id,
+            &reference.sha256,
+            first_id,
+            false,
+            &restarted,
+        )
+        .unwrap();
+        assert_eq!(disabled.entries.len(), 2, "disabled entries stay visible");
+        assert!(!disabled.entries[0].enabled);
+        assert_eq!(disabled.entries[0].applied_turn_count, 0);
+        let enabled = local_vocabulary_set_enabled_for_test(
+            meeting_id,
+            &reference.sha256,
+            first_id,
+            true,
+            &restarted,
+        )
+        .unwrap();
+        assert!(enabled.entries[0].enabled);
+        assert_eq!(enabled.entries[0].applied_turn_count, 2);
+        let deleted =
+            local_vocabulary_delete_for_test(meeting_id, &reference.sha256, second_id, &restarted)
+                .unwrap();
+        assert_eq!(deleted.entries.len(), 1);
+        assert_eq!(sha256_file(&transcript_path).unwrap(), source_digest);
+
+        assert!(
+            local_vocabulary_add_for_test(
+                meeting_id,
+                &"b".repeat(64),
+                "Other",
+                "Other preferred",
+                &restarted,
+            )
+            .is_err()
+        );
+
+        fs::write(
+            storage.path().join("local-vocabulary.json"),
+            b"not a vocabulary document",
+        )
+        .unwrap();
+        assert!(local_vocabulary_list_for_test(meeting_id, &reference.sha256, &restarted).is_err());
+        assert_eq!(sha256_file(&transcript_path).unwrap(), source_digest);
+    }
+
+    fn local_vocabulary_list_for_test(
+        meeting_id: Uuid,
+        digest: &str,
+        state: &ApplicationState,
+    ) -> Result<LocalVocabularySheetResponse, String> {
+        with_current_local_vocabulary(meeting_id, digest, state, local_vocabulary_sheet_response)
+    }
+
+    fn local_vocabulary_add_for_test(
+        meeting_id: Uuid,
+        digest: &str,
+        source: &str,
+        replacement: &str,
+        state: &ApplicationState,
+    ) -> Result<LocalVocabularySheetResponse, String> {
+        with_current_local_vocabulary(meeting_id, digest, state, |vocabulary, turns| {
+            vocabulary
+                .add(source, replacement)
+                .map_err(local_vocabulary_error)?;
+            local_vocabulary_sheet_response(vocabulary, turns)
+        })
+    }
+
+    fn local_vocabulary_edit_for_test(
+        meeting_id: Uuid,
+        digest: &str,
+        id: Uuid,
+        source: &str,
+        replacement: &str,
+        state: &ApplicationState,
+    ) -> Result<LocalVocabularySheetResponse, String> {
+        with_current_local_vocabulary(meeting_id, digest, state, |vocabulary, turns| {
+            vocabulary
+                .edit(id, source, replacement)
+                .map_err(local_vocabulary_error)?;
+            local_vocabulary_sheet_response(vocabulary, turns)
+        })
+    }
+
+    fn local_vocabulary_set_enabled_for_test(
+        meeting_id: Uuid,
+        digest: &str,
+        id: Uuid,
+        enabled: bool,
+        state: &ApplicationState,
+    ) -> Result<LocalVocabularySheetResponse, String> {
+        with_current_local_vocabulary(meeting_id, digest, state, |vocabulary, turns| {
+            vocabulary
+                .set_enabled(id, enabled)
+                .map_err(local_vocabulary_error)?;
+            local_vocabulary_sheet_response(vocabulary, turns)
+        })
+    }
+
+    fn local_vocabulary_delete_for_test(
+        meeting_id: Uuid,
+        digest: &str,
+        id: Uuid,
+        state: &ApplicationState,
+    ) -> Result<LocalVocabularySheetResponse, String> {
+        with_current_local_vocabulary(meeting_id, digest, state, |vocabulary, turns| {
+            vocabulary.delete(id).map_err(local_vocabulary_error)?;
+            local_vocabulary_sheet_response(vocabulary, turns)
+        })
+    }
+
     fn gated_document_with_voiceprint(voiceprint: &str) -> Vec<u8> {
         format!(
             r#"{{
@@ -9287,7 +11138,10 @@ mod tests {
         );
         let (_turns, warnings) =
             parse_transcript_projection_with(&document, &BTreeSet::new()).unwrap();
-        assert!(warnings[0].contains("keeps returning as one voice"), "{warnings:?}");
+        assert!(
+            warnings[0].contains("keeps returning as one voice"),
+            "{warnings:?}"
+        );
         assert!(!warnings[0].contains("seconds"), "{warnings:?}");
         assert!(!warnings[0].contains("100"), "{warnings:?}");
     }
@@ -9304,10 +11158,16 @@ mod tests {
             parse_transcript_projection_with(&document, &BTreeSet::new()).unwrap();
         let disclosure = warnings.last().expect("a disclosure");
         assert!(disclosure.contains("not on meeting audio"), "{warnings:?}");
-        assert!(disclosure.contains("3 enrolment sitting(s)"), "{warnings:?}");
+        assert!(
+            disclosure.contains("3 enrolment sitting(s)"),
+            "{warnings:?}"
+        );
         assert!(disclosure.contains("5%"), "{warnings:?}");
         // No alert, because the dropped speech was not one recurring voice.
-        assert!(!warnings.iter().any(|line| line.contains("one voice")), "{warnings:?}");
+        assert!(
+            !warnings.iter().any(|line| line.contains("one voice")),
+            "{warnings:?}"
+        );
     }
 
     #[test]
@@ -9320,8 +11180,14 @@ mod tests {
         );
         let (_turns, warnings) =
             parse_transcript_projection_with(&document, &BTreeSet::new()).unwrap();
-        assert!(!warnings.iter().any(|line| line.contains("threshold")), "{warnings:?}");
-        assert!(!warnings.iter().any(|line| line.contains("one voice")), "{warnings:?}");
+        assert!(
+            !warnings.iter().any(|line| line.contains("threshold")),
+            "{warnings:?}"
+        );
+        assert!(
+            !warnings.iter().any(|line| line.contains("one voice")),
+            "{warnings:?}"
+        );
     }
 
     #[test]
@@ -9382,7 +11248,9 @@ mod tests {
                 meeting_id: "meeting".into(),
                 turns: vec![TranscriptTurn {
                     source_turn_index: 0,
+                    source_speaker: Some("Me".into()),
                     speaker: Some("Me".into()),
+                    speaker_corrected: false,
                     start: 0.0,
                     text: "words".into(),
                     withheld: false,
@@ -9461,6 +11329,71 @@ mod tests {
         );
     }
 
+    #[test]
+    fn durable_queue_release_moves_stopping_capture_through_captured_to_idle() {
+        let mut model = AppModel::default();
+        transition_capture(&mut model, CaptureState::Arming).unwrap();
+        transition_capture(&mut model, CaptureState::Recording).unwrap();
+        transition_capture(&mut model, CaptureState::Stopping).unwrap();
+        transition_capture(&mut model, CaptureState::Captured).unwrap();
+        transition_capture(&mut model, CaptureState::Idle).unwrap();
+        assert_eq!(model.reducer.capture(), CaptureState::Idle);
+    }
+
+    #[test]
+    fn queue_recovery_selection_repairs_results_but_skips_terminal_items() {
+        use local_meeting_notes_session_core::transcription_queue::{
+            TranscriptionQueueItem, TranscriptionRequestSchema, TranscriptionResult,
+            TranscriptionResultSchema, TranscriptionTerminal, TranscriptionTerminalKind,
+            TranscriptionTerminalSchema,
+        };
+        let request = TranscriptionRequest {
+            schema: TranscriptionRequestSchema::V1,
+            request_id: Uuid::new_v4(),
+            meeting_id: Uuid::new_v4().to_string(),
+            capture_session_sha256: "a".repeat(64),
+            microphone_audio_sha256: "b".repeat(64),
+            system_audio_sha256: "c".repeat(64),
+            model_identity: "model/v1".into(),
+            worker_runtime_identity: "runtime/v1".into(),
+            enqueued_at_epoch_seconds: 1,
+        };
+        let result = TranscriptionResult {
+            schema: TranscriptionResultSchema::V1,
+            request_id: request.request_id,
+            meeting_id: request.meeting_id.clone(),
+            transcript: ArtifactRef {
+                relative_path: "transcript/test.json".into(),
+                sha256: "d".repeat(64),
+            },
+            result_sha256: "e".repeat(64),
+            produced_at_epoch_seconds: 2,
+        };
+        let repairable = TranscriptionQueueItem {
+            request: request.clone(),
+            claim: None,
+            result: Some(result),
+            terminal: None,
+            commit: None,
+        };
+        assert!(queue_item_is_repairable(&repairable));
+        assert!(!queue_item_is_eligible(&repairable));
+        let quarantined = TranscriptionQueueItem {
+            request,
+            claim: None,
+            result: Some(repairable.result.clone().unwrap()),
+            terminal: Some(TranscriptionTerminal {
+                schema: TranscriptionTerminalSchema::V1,
+                request_id: repairable.request.request_id,
+                kind: TranscriptionTerminalKind::Quarantined,
+                at_epoch_seconds: 3,
+            }),
+            commit: None,
+        };
+        assert!(!queue_item_is_repairable(&quarantined));
+        assert!(!queue_item_is_eligible(&quarantined));
+    }
+
     fn view_current_transcript_resolves_with_restored_turn_visible() {
         use local_meeting_notes_session_core::operations::{TranscriptView, TranscriptViewSchema};
         use local_meeting_notes_session_core::storage::{create_private_dir, durable_create_new};
@@ -9509,6 +11442,7 @@ mod tests {
             &meeting_id.to_string(),
             &reference,
             &view_bytes,
+            true,
         )
         .unwrap();
         assert_eq!(turns.len(), 3);
@@ -9547,7 +11481,9 @@ mod tests {
                 meeting_id: "meeting-fixture".into(),
                 turns: vec![TranscriptTurn {
                     source_turn_index: 0,
+                    source_speaker: Some("Me".into()),
                     speaker: Some("Me".into()),
+                    speaker_corrected: false,
                     start: 0.0,
                     text: "visible".into(),
                     withheld: false,
@@ -9564,6 +11500,39 @@ mod tests {
         assert_eq!(snapshot.capture, CaptureState::TranscriptReady);
         assert_eq!(snapshot.meeting_id.as_deref(), Some("meeting-fixture"));
         assert_eq!(snapshot.turns[0].text, "visible");
+    }
+
+    #[test]
+    fn keeping_the_current_transcript_reports_only_that() {
+        let response = retry_decision_response(TranscriptRetryOutcome::CurrentKept).unwrap();
+
+        assert_eq!(response.outcome, "current-kept");
+        assert_eq!(response.message, "The current transcript was kept.");
+    }
+
+    /// The promoted copy is deliberately identical whether or not the meeting
+    /// had a generated note, because this command is handed one settled outcome
+    /// and no note fact. Both cases must read truthfully off the same string.
+    #[test]
+    fn promoting_a_retry_never_claims_a_note_was_cleared() {
+        let response = retry_decision_response(TranscriptRetryOutcome::CandidatePromoted).unwrap();
+
+        assert_eq!(response.outcome, "candidate-promoted");
+        assert_eq!(
+            response.message,
+            "The retry transcript is now current. Generate a new note when you're ready."
+        );
+        assert!(!response.message.contains("cleared"));
+        assert!(!response.message.contains("previous note"));
+    }
+
+    #[test]
+    fn an_undecided_candidate_is_refused_rather_than_reported_as_settled() {
+        assert_eq!(
+            retry_decision_response(TranscriptRetryOutcome::CandidateAvailableForComparison)
+                .unwrap_err(),
+            "The retry candidate is still awaiting a decision."
+        );
     }
 
     #[test]
