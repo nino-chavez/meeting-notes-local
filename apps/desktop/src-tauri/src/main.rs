@@ -103,6 +103,9 @@ use local_meeting_notes_session_core::supervision::{
 use local_meeting_notes_session_core::transcript_deletion::reconcile_pending_transcript_deletions;
 use local_meeting_notes_session_core::transcript_restoration::resolve_stored_transcript_primed;
 use local_meeting_notes_session_core::transcript_retry::TranscriptRetryOutcome;
+use local_meeting_notes_session_core::transcription_queue::{
+    TranscriptionQueue, TranscriptionRequest,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -175,6 +178,8 @@ struct ApplicationState {
     storage: Arc<Mutex<Option<StorageContext>>>,
     runtime: Mutex<Option<RuntimeIdentity>>,
     worker: Arc<Mutex<Option<OwnedChild>>>,
+    transcription_worker: Arc<Mutex<Option<OwnedChild>>>,
+    transcription_executor: Mutex<Option<TranscriptionExecutorControl>>,
     capture_task: Mutex<Option<CaptureTaskControl>>,
     sitting_task: Mutex<Option<SittingTaskControl>>,
     command_lock: Mutex<()>,
@@ -210,6 +215,8 @@ impl Default for ApplicationState {
             storage: Arc::new(Mutex::new(None)),
             runtime: Mutex::new(None),
             worker: Arc::new(Mutex::new(None)),
+            transcription_worker: Arc::new(Mutex::new(None)),
+            transcription_executor: Mutex::new(None),
             capture_task: Mutex::new(None),
             sitting_task: Mutex::new(None),
             command_lock: Mutex::new(()),
@@ -233,6 +240,22 @@ impl Default for ApplicationState {
 
 impl Drop for ApplicationState {
     fn drop(&mut self) {
+        if let Ok(mut slot) = self.transcription_worker.lock() {
+            if let Some(mut worker) = slot.take() {
+                let _ = worker.stop_and_wait(Duration::from_millis(750));
+            }
+        }
+        if let Ok(mut slot) = self.worker.lock() {
+            if let Some(mut worker) = slot.take() {
+                let _ = worker.stop_and_wait(Duration::from_millis(750));
+            }
+        }
+        if let Ok(slot) = self.transcription_executor.get_mut() {
+            if let Some(control) = slot.take() {
+                control.stop.store(true, Ordering::SeqCst);
+                let _ = control.handle.join();
+            }
+        }
         // App teardown owns the same child slot as explicit Stop. No PID is
         // retained or signalled after this state goes away.
         if let Ok(slot) = self.audio_playback.get_mut() {
@@ -364,6 +387,8 @@ struct AppModel {
     started_at_epoch_seconds: Option<u64>,
     capture_state_started_at_epoch_seconds: Option<u64>,
     transcription_last_worker_heartbeat_at_epoch_seconds: Option<u64>,
+    background_transcription_active: bool,
+    background_transcription_queued_count: usize,
     degraded: bool,
     mic_state: Option<String>,
     system_state: Option<String>,
@@ -391,6 +416,8 @@ impl Default for AppModel {
             started_at_epoch_seconds: None,
             capture_state_started_at_epoch_seconds: None,
             transcription_last_worker_heartbeat_at_epoch_seconds: None,
+            background_transcription_active: false,
+            background_transcription_queued_count: 0,
             degraded: false,
             mic_state: None,
             system_state: None,
@@ -416,6 +443,8 @@ impl AppModel {
             capture_state_started_at_epoch_seconds: self.capture_state_started_at_epoch_seconds,
             transcription_last_worker_heartbeat_at_epoch_seconds: self
                 .transcription_last_worker_heartbeat_at_epoch_seconds,
+            background_transcription_active: self.background_transcription_active,
+            background_transcription_queued_count: self.background_transcription_queued_count,
             degraded: self.degraded,
             mic_state: self.mic_state.clone(),
             system_state: self.system_state.clone(),
@@ -453,6 +482,8 @@ struct AppSnapshot {
     started_at_epoch_seconds: Option<u64>,
     capture_state_started_at_epoch_seconds: Option<u64>,
     transcription_last_worker_heartbeat_at_epoch_seconds: Option<u64>,
+    background_transcription_active: bool,
+    background_transcription_queued_count: usize,
     degraded: bool,
     mic_state: Option<String>,
     system_state: Option<String>,
@@ -615,8 +646,7 @@ struct RetryComparisonResponse {
     current: RetryTranscriptProjection,
     candidate: RetryTranscriptProjection,
     quality: local_meeting_notes_session_core::capture_quality::CaptureQualityProjection,
-    recording_device:
-        local_meeting_notes_session_core::capture_quality::RecordingDeviceProjection,
+    recording_device: local_meeting_notes_session_core::capture_quality::RecordingDeviceProjection,
 }
 
 #[derive(Deserialize)]
@@ -1025,6 +1055,7 @@ struct RuntimeIdentity {
     admission: String,
     worker_build_sha256: String,
     worker_executable_sha256: String,
+    transcript_model_identity: String,
     tap_build_sha256: String,
     tap_path: PathBuf,
     /// The digest the verified manifest records for the speaker encoder.
@@ -1046,6 +1077,11 @@ struct RuntimeIdentity {
     /// signal, so the recorder surface derives its honest boundary from it
     /// instead of hardcoding the placeholder's digest.
     encoder_available: bool,
+}
+
+struct TranscriptionExecutorControl {
+    stop: Arc<AtomicBool>,
+    handle: JoinHandle<()>,
 }
 
 struct CaptureTaskControl {
@@ -1781,6 +1817,9 @@ fn start_meeting(
     if state.model_install_active.load(Ordering::SeqCst) {
         return Err("Wait for the speech model change to finish before starting a meeting.".into());
     }
+    if transcription_capacity_full(&state) {
+        return Err("The local transcription queue is full. Wait for the previous meeting to finish processing.".into());
+    }
     let meeting_id = Uuid::new_v4().to_string();
     let attempt_id = Uuid::new_v4().to_string();
     let (sender, receiver) = mpsc::sync_channel(1);
@@ -1841,6 +1880,30 @@ fn start_meeting(
             "The recording task could not start.".to_string()
         })?;
     Ok(snapshot)
+}
+
+fn transcription_capacity_full(state: &ApplicationState) -> bool {
+    let storage = state
+        .storage
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|context| context.storage.clone()));
+    let Some(storage) = storage else {
+        return true;
+    };
+    TranscriptionQueue::open(&storage)
+        .and_then(|queue| queue.discover())
+        .map(|discovery| {
+            discovery
+                .items
+                .into_iter()
+                .filter(|item| {
+                    item.terminal.is_none() && item.commit.is_none() && item.result.is_none()
+                })
+                .count()
+                >= 2
+        })
+        .unwrap_or(true)
 }
 
 #[tauri::command]
@@ -6194,13 +6257,36 @@ fn initialize_application(app: AppHandle, retry: bool) {
         .expect("worker process lock")
         .take()
         .map(|mut worker| worker.stop_and_wait(Duration::from_millis(750)));
-    if let Some(Err(error)) = worker_cleanup {
+    let worker_cleanup_failed = if let Some(Err(error)) = worker_cleanup {
         write_diagnostic(&state, "worker_cleanup_failed", &error.to_string());
+        true
+    } else {
+        false
+    };
+    let transcription_worker_cleanup = state
+        .transcription_worker
+        .lock()
+        .expect("transcription worker process lock")
+        .take()
+        .map(|mut worker| worker.stop_and_wait(Duration::from_millis(750)));
+    let transcription_worker_cleanup_failed = if let Some(Err(error)) = transcription_worker_cleanup
+    {
+        write_diagnostic(
+            &state,
+            "transcription_worker_cleanup_failed",
+            &error.to_string(),
+        );
+        true
+    } else {
+        false
+    };
+    stop_transcription_queue_executor(&state);
+    if worker_cleanup_failed || transcription_worker_cleanup_failed {
         finish_startup_failure(
             &state,
             retry,
             StartupFailure::Diagnostic,
-            "the previous worker could not be stopped safely",
+            "a previous worker could not be stopped safely",
         );
         return;
     }
@@ -6323,6 +6409,12 @@ fn initialize_application(app: AppHandle, retry: bool) {
             )
         }
         Err(error) => {
+            let _ = state
+                .worker
+                .lock()
+                .expect("worker process lock")
+                .take()
+                .map(|mut worker| worker.stop_and_wait(Duration::from_millis(750)));
             let _ = write_private_diagnostic(
                 &storage_context.diagnostics,
                 "meeting_recovery_failed",
@@ -6432,7 +6524,7 @@ fn initialize_application(app: AppHandle, retry: bool) {
     };
     set_startup_message(&state, "Starting the local transcription engine.");
     let worker_path = storage_context.resource_root.join(&manifest.runtime.path);
-    let mut command = Command::new(worker_path);
+    let mut command = Command::new(&worker_path);
     command
         .args(["-E", "-s", "-B", "-m", "worker.main"])
         .arg("--app-data-root")
@@ -6553,11 +6645,16 @@ fn initialize_application(app: AppHandle, retry: bool) {
         .iter()
         .map(|model| (model.id.clone(), model.sha256.clone()))
         .collect();
-    packaged_models.extend(external_models);
+    packaged_models.extend(external_models.clone());
     let runtime = RuntimeIdentity {
         admission: "internal-alpha".into(),
         worker_build_sha256: manifest.worker.sha256.clone(),
         worker_executable_sha256: manifest.runtime.sha256.clone(),
+        transcript_model_identity: installed_transcript_model
+            .as_ref()
+            .map(|model| format!("{}@{}", model.entry.id, model.entry.revision))
+            .or_else(|| manifest.models.first().map(|model| model.id.clone()))
+            .unwrap_or_else(|| "bundled-transcript-model".into()),
         tap_build_sha256: manifest.tap.sha256.clone(),
         tap_path: storage_context.resource_root.join(&manifest.tap.path),
         encoder_sha256: manifest.encoder.sha256.clone(),
@@ -6566,9 +6663,70 @@ fn initialize_application(app: AppHandle, retry: bool) {
             != Some(std::ffi::OsStr::new("encoder-unavailable.identity")),
     };
     *state.worker.lock().expect("worker process lock") = Some(worker);
+    let mut transcription_command = Command::new(&worker_path);
+    transcription_command
+        .args(["-E", "-s", "-B", "-m", "worker.main"])
+        .arg("--app-data-root")
+        .arg(storage_context.storage.path())
+        .arg("--runtime-manifest")
+        .arg(&storage_context.manifest_path);
+    if let Some(installed) = installed_transcript_model.as_ref() {
+        transcription_command
+            .arg("--transcript-model-receipt")
+            .arg(&installed.receipt_path);
+    }
+    transcription_command.current_dir(&storage_context.resource_root);
+    let mut transcription_worker = match OwnedChild::spawn(&mut transcription_command) {
+        Ok(worker) => worker,
+        Err(error) => {
+            let _ = state
+                .worker
+                .lock()
+                .expect("worker process lock")
+                .take()
+                .map(|mut worker| worker.stop_and_wait(Duration::from_millis(750)));
+            let _ = write_private_diagnostic(
+                &storage_context.diagnostics,
+                "transcription_worker_spawn_failed",
+                &error.to_string(),
+            );
+            finish_startup_failure(
+                &state,
+                retry,
+                StartupFailure::Diagnostic,
+                "the dedicated transcription worker could not start",
+            );
+            return;
+        }
+    };
+    let transcription_operations = internal_alpha_operations();
+    match transcription_worker.wait_ready(Duration::from_secs(10), &transcription_operations) {
+        Ok(ready) if manifest.matches_ready_with_external_models(&ready, &external_models) => {}
+        _ => {
+            let mut worker = transcription_worker;
+            let _ = worker.stop_and_wait(Duration::from_millis(750));
+            let _ = state
+                .worker
+                .lock()
+                .expect("worker process lock")
+                .take()
+                .map(|mut worker| worker.stop_and_wait(Duration::from_millis(750)));
+            finish_startup_failure(
+                &state,
+                retry,
+                StartupFailure::Runtime,
+                "the dedicated transcription worker failed its startup check",
+            );
+            return;
+        }
+    }
+    *state
+        .transcription_worker
+        .lock()
+        .expect("transcription worker process lock") = Some(transcription_worker);
     *state.runtime.lock().expect("runtime identity lock") = Some(runtime.clone());
     let mut model = state.model.lock().expect("application model lock");
-    model.admission = runtime.admission;
+    model.admission = runtime.admission.clone();
     model.startup_message = "Finishing your private workspace.".into();
     if let Some(projection) = restored_transcript
         && let Err(error) = apply_restored_transcript_projection(&mut model, projection)
@@ -6582,6 +6740,8 @@ fn initialize_application(app: AppHandle, retry: bool) {
     } else {
         model.startup_message = "Yawn is ready.".into();
     }
+    drop(model);
+    start_transcription_queue_executor(&app, &storage_context.storage, &runtime);
 }
 
 enum StartupFailure {
@@ -7343,140 +7503,83 @@ fn run_capture_task(
         );
         return;
     }
-    {
-        let mut model = state.model.lock().expect("application model lock");
-        if transition_capture(&mut model, CaptureState::Captured).is_err()
-            || transition_capture(&mut model, CaptureState::Transcribing).is_err()
-        {
-            drop(model);
+    let runtime = state
+        .runtime
+        .lock()
+        .expect("runtime identity lock")
+        .clone()
+        .ok_or_else(|| "verified runtime identity is unavailable".to_string());
+    let storage = state
+        .storage
+        .lock()
+        .expect("storage context lock")
+        .as_ref()
+        .map(|context| context.storage.clone())
+        .ok_or_else(|| "private storage is unavailable".to_string());
+    let request = match (runtime, storage) {
+        (Ok(runtime), Ok(_storage)) => {
+            let meeting = load_meeting(&attempt.meeting_dir).map_err(error_text);
+            match meeting {
+                Ok(meeting) => TranscriptionRequest {
+                    schema: local_meeting_notes_session_core::transcription_queue::TranscriptionRequestSchema::V1,
+                    request_id: Uuid::new_v4(),
+                    meeting_id: meeting_id.clone(),
+                    capture_session_sha256: meeting.artifacts.capture_session.as_ref().unwrap().sha256.clone(),
+                    microphone_audio_sha256: meeting.artifacts.microphone_audio.as_ref().unwrap().sha256.clone(),
+                    system_audio_sha256: meeting.artifacts.system_audio.as_ref().unwrap().sha256.clone(),
+                    model_identity: runtime.transcript_model_identity.clone(),
+                    worker_runtime_identity: runtime.worker_executable_sha256.clone(),
+                    enqueued_at_epoch_seconds: now_epoch_seconds(),
+                },
+                Err(error) => {
+                    fail_capture_task(&app, Some(&meeting_id), false, true, "transcription_queue_meeting_load_failed", &error, "The capture could not be queued for local transcription.");
+                    return;
+                }
+            }
+        }
+        (Err(error), _) | (_, Err(error)) => {
             fail_capture_task(
                 &app,
                 Some(&meeting_id),
                 false,
                 true,
-                "capture_processing_transition_failed",
-                "application state changed before transcription",
-                "The captured meeting could not enter transcription.",
-            );
-            return;
-        }
-    }
-
-    let transcript_result = request_worker(
-        &state,
-        Operation::TranscriptCreate,
-        json!({"meeting_id": meeting_id}),
-        TRANSCRIPT_REQUEST_TIMEOUT,
-    );
-    let transcript_digests = match transcript_result {
-        Ok(result) => match exact_digests(&result, &["transcript"]) {
-            Ok(digests) => digests,
-            Err(error) => {
-                finish_transcription_failure(
-                    &app,
-                    &attempt.meeting_dir,
-                    &meeting_id,
-                    false,
-                    "transcript_digest_set_invalid",
-                    &error,
-                    "The transcript result could not be verified.",
-                );
-                return;
-            }
-        },
-        Err(error) => {
-            finish_transcription_failure(
-                &app,
-                &attempt.meeting_dir,
-                &meeting_id,
-                error.is_supervisor(),
-                "transcript_worker_failed",
-                &error.to_string(),
-                "The offline transcript could not be created.",
-            );
-            return;
-        }
-    };
-    let transcript_digest = &transcript_digests["transcript"];
-    let transcript_reference = match verified_artifact(
-        &attempt.meeting_dir,
-        &format!("transcript/{transcript_digest}.json"),
-        transcript_digest,
-    ) {
-        Ok(reference) => reference,
-        Err(error) => {
-            finish_transcription_failure(
-                &app,
-                &attempt.meeting_dir,
-                &meeting_id,
-                false,
-                "transcript_artifact_invalid",
+                "transcription_queue_context_missing",
                 &error,
-                "The transcript file did not match its verified identity.",
+                "The capture could not be queued for local transcription.",
             );
             return;
         }
     };
-    let (turns, warnings) = match load_transcript_projection(
-        &attempt.meeting_dir,
-        &meeting_id,
-        &transcript_reference,
-    ) {
-        Ok(projection) => projection,
-        Err(error) => {
-            finish_transcription_failure(
-                &app,
-                &attempt.meeting_dir,
-                &meeting_id,
-                false,
-                "transcript_projection_invalid",
-                &error,
-                "The transcript could not be displayed safely.",
-            );
-            return;
-        }
-    };
-    let mut meeting = match load_meeting(&attempt.meeting_dir) {
-        Ok(meeting) => meeting,
-        Err(error) => {
-            finish_transcription_failure(
-                &app,
-                &attempt.meeting_dir,
-                &meeting_id,
-                true,
-                "transcript_meeting_load_failed",
-                &error.to_string(),
-                "The transcript could not be attached to its meeting.",
-            );
-            return;
-        }
-    };
-    meeting.lifecycle = MeetingLifecycle::TranscriptReady;
-    let current_transcript_sha256 = transcript_reference.sha256.clone();
-    meeting.artifacts.current_transcript = Some(transcript_reference);
-    if let Err(error) = write_meeting(&attempt.meeting_dir, &meeting) {
-        finish_transcription_failure(
+    let storage = state
+        .storage
+        .lock()
+        .expect("storage context lock")
+        .as_ref()
+        .unwrap()
+        .storage
+        .clone();
+    if let Err(error) = TranscriptionQueue::open(&storage).and_then(|queue| queue.enqueue(request))
+    {
+        fail_capture_task(
             &app,
-            &attempt.meeting_dir,
-            &meeting_id,
+            Some(&meeting_id),
+            false,
             true,
-            "transcript_meeting_commit_failed",
+            "transcription_queue_enqueue_failed",
             &error.to_string(),
-            "The transcript could not be attached to its meeting.",
+            "The capture could not be queued for local transcription.",
         );
         return;
     }
     {
         let mut model = state.model.lock().expect("application model lock");
-        if transition_capture(&mut model, CaptureState::TranscriptReady).is_err() {
-            model.error = Some("The transcript was saved but its screen could not open.".into());
+        if transition_capture(&mut model, CaptureState::Captured).is_err()
+            || transition_capture(&mut model, CaptureState::Idle).is_err()
+        {
+            model.error =
+                Some("The capture was saved, but the recorder could not return to idle.".into());
         } else {
-            model.turns = turns;
-            model.current_transcript_sha256 = Some(current_transcript_sha256);
-            model.warnings = warnings;
-            model.error = None;
-            model.mic_state = None;
-            model.system_state = None;
+            model.clear_meeting_projection();
         }
     }
 }
@@ -7631,6 +7734,241 @@ fn request_worker(
         return Err(WorkerCallError::Rejected);
     }
     Ok(result.artifact_digests)
+}
+
+fn request_worker_on(
+    worker: Arc<Mutex<Option<OwnedChild>>>,
+    operation: Operation,
+    arguments: Value,
+    timeout: Duration,
+    mut heartbeat: impl FnMut(&WorkerProgress) -> Result<(), ProtocolError>,
+) -> Result<HashMap<String, String>, WorkerCallError> {
+    let port = product_coordinator::ProcessWorkerPort::new(worker);
+    let result: WorkerResult = port
+        .request_with_progress(operation, arguments, timeout, |progress| {
+            heartbeat(progress)
+        })
+        .map_err(|unavailable| WorkerCallError::Supervisor(unavailable.0))?;
+    if !result.ok {
+        return Err(WorkerCallError::Rejected);
+    }
+    Ok(result.artifact_digests)
+}
+
+fn start_transcription_queue_executor(
+    app: &AppHandle,
+    storage: &StorageRoot,
+    runtime: &RuntimeIdentity,
+) {
+    let state = app.state::<ApplicationState>();
+    let mut executor = state
+        .transcription_executor
+        .lock()
+        .expect("transcription executor lock");
+    if executor.is_some() {
+        return;
+    }
+    let app = app.clone();
+    let storage = storage.clone();
+    let runtime = runtime.clone();
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = stop.clone();
+    let handle = match std::thread::Builder::new()
+        .name("background-transcription-queue".into())
+        .spawn(move || loop {
+            if thread_stop.load(Ordering::SeqCst) { break; }
+            let state = app.state::<ApplicationState>();
+            let queue = match TranscriptionQueue::open(&storage) {
+                Ok(queue) => queue,
+                Err(error) => {
+                    write_diagnostic(&state, "transcription_queue_open_failed", &error.to_string());
+                    std::thread::sleep(Duration::from_millis(250));
+                    continue;
+                }
+            };
+            let item = match recover_transcription_queue(&state, &storage, &runtime, &queue) {
+                Ok(discovery) => {
+                    let eligible = discovery
+                        .items
+                        .into_iter()
+                        .filter(queue_item_is_eligible)
+                        .collect::<Vec<_>>();
+                    let queued_count = eligible.len();
+                    let item = eligible.into_iter().next();
+                    if let Ok(mut model) = state.model.lock() {
+                        model.background_transcription_queued_count = queued_count;
+                        model.background_transcription_active = item.is_some();
+                    }
+                    item
+                }
+                Err(error) => {
+                    write_diagnostic(&state, "transcription_queue_recovery_failed", &error);
+                    std::thread::sleep(Duration::from_millis(250));
+                    continue;
+                }
+            };
+            let Some(item) = item else {
+                std::thread::sleep(Duration::from_millis(250));
+                continue;
+            };
+            let request_id = item.request.request_id;
+            let claim = match queue.claim(request_id, runtime.worker_executable_sha256.clone(), now_epoch_seconds()) {
+                Ok(item) => item.claim,
+                Err(error) => {
+                    write_diagnostic(&state, "transcription_queue_claim_failed", &error.to_string());
+                    continue;
+                }
+            };
+            let Some(claim) = claim else { continue };
+            let expected_meeting = match Uuid::parse_str(&item.request.meeting_id) {
+                Ok(id) => id,
+                Err(_) => {
+                    let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds());
+                    continue;
+                }
+            };
+            let worker = state.transcription_worker.clone();
+            let worker_request_id = Arc::new(Mutex::new(None::<Uuid>));
+            let heartbeat_id = worker_request_id.clone();
+            let result = request_worker_on(
+                worker,
+                Operation::TranscriptCreate,
+                json!({"meeting_id": item.request.meeting_id}),
+                TRANSCRIPT_REQUEST_TIMEOUT,
+                |progress| {
+                    if progress.event != ProgressEvent::CaptureState || progress.state != CaptureProgressState::Transcribing || progress.meeting_id != expected_meeting {
+                        return Err(ProtocolError::InvalidEvent);
+                    }
+                    let mut id = heartbeat_id.lock().map_err(|_| ProtocolError::InvalidEvent)?;
+                    if let Some(existing) = *id {
+                        if existing != progress.request_id { return Err(ProtocolError::InvalidEvent); }
+                    } else { *id = Some(progress.request_id); }
+                    Ok(())
+                },
+            );
+            match result {
+                Ok(digests) => {
+                    let digest = match exact_digests(&digests, &["transcript"]) { Ok(digests) => digests["transcript"].clone(), Err(error) => { let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds()); write_diagnostic(&state, "transcription_queue_digest_invalid", &error); continue; } };
+                    let meeting_dir = match storage.resolve(Path::new("meetings").join(&item.request.meeting_id).as_path()) { Ok(path) => path, Err(_) => { let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds()); continue; } };
+                    let reference = match verified_artifact(&meeting_dir, &format!("transcript/{digest}.json"), &digest) { Ok(reference) => reference, Err(error) => { let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds()); write_diagnostic(&state, "transcription_queue_artifact_invalid", &error); continue; } };
+                    if let Err(error) = load_transcript_projection(&meeting_dir, &item.request.meeting_id, &reference) {
+                        let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds());
+                        write_diagnostic(&state, "transcription_queue_projection_invalid", &error);
+                        continue;
+                    }
+                    let path = match resolve_artifact(&meeting_dir, &reference.relative_path) { Ok(path) => path, Err(_) => { let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds()); continue; } };
+                    let bytes = match read_private_bytes(&path, TRANSCRIPT_MAX_BYTES) { Ok(bytes) => bytes, Err(_) => { let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds()); continue; } };
+                    if queue.admit_result(request_id, &bytes, reference, now_epoch_seconds()).is_err() || queue.commit(request_id, now_epoch_seconds()).is_err() {
+                        let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds());
+                    }
+                }
+                Err(WorkerCallError::Rejected) => { let _ = queue.fail(request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Failed, now_epoch_seconds()); }
+                Err(WorkerCallError::Supervisor(_)) => { let _ = queue.release_claim(request_id, claim.claim_id, now_epoch_seconds()); }
+            }
+        }) {
+        Ok(handle) => handle,
+        Err(error) => {
+            write_diagnostic(&state, "transcription_executor_spawn_failed", &error.to_string());
+            return;
+        }
+    };
+    *executor = Some(TranscriptionExecutorControl { stop, handle });
+}
+
+fn recover_transcription_queue(
+    state: &ApplicationState,
+    storage: &StorageRoot,
+    runtime: &RuntimeIdentity,
+    queue: &TranscriptionQueue<'_>,
+) -> Result<local_meeting_notes_session_core::transcription_queue::QueueDiscovery, String> {
+    let discovery = queue.discover().map_err(|error| error.to_string())?;
+    for item in &discovery.items {
+        if item.terminal.is_some() {
+            continue;
+        }
+        if let Some(claim) = &item.claim {
+            queue
+                .release_claim(item.request.request_id, claim.claim_id, now_epoch_seconds())
+                .map_err(|error| error.to_string())?;
+        }
+        if queue_item_is_repairable(item) {
+            let meeting_dir = storage
+                .resolve(
+                    Path::new("meetings")
+                        .join(&item.request.meeting_id)
+                        .as_path(),
+                )
+                .map_err(error_text)?;
+            let reference = item.result.as_ref().unwrap().transcript.clone();
+            if load_transcript_projection(&meeting_dir, &item.request.meeting_id, &reference)
+                .is_ok()
+            {
+                queue
+                    .commit(item.request.request_id, now_epoch_seconds())
+                    .map_err(|error| error.to_string())?;
+            } else {
+                let _ = queue.fail(item.request.request_id, local_meeting_notes_session_core::transcription_queue::TranscriptionTerminalKind::Quarantined, now_epoch_seconds());
+                write_diagnostic(
+                    state,
+                    "transcription_queue_projection_invalid",
+                    "stored transcript projection could not be revalidated",
+                );
+            }
+        }
+    }
+    let discovery = queue.discover().map_err(|error| error.to_string())?;
+    for meeting_id in discovery.orphan_captured_meetings {
+        let meeting_dir = storage
+            .resolve(Path::new("meetings").join(&meeting_id).as_path())
+            .map_err(error_text)?;
+        let meeting = load_meeting(&meeting_dir).map_err(error_text)?;
+        let request = TranscriptionRequest {
+            schema: local_meeting_notes_session_core::transcription_queue::TranscriptionRequestSchema::V1,
+            request_id: Uuid::new_v4(),
+            meeting_id: meeting_id.clone(),
+            capture_session_sha256: meeting.artifacts.capture_session.as_ref().ok_or_else(|| "captured meeting has no session artifact".to_string())?.sha256.clone(),
+            microphone_audio_sha256: meeting.artifacts.microphone_audio.as_ref().ok_or_else(|| "captured meeting has no microphone artifact".to_string())?.sha256.clone(),
+            system_audio_sha256: meeting.artifacts.system_audio.as_ref().ok_or_else(|| "captured meeting has no system artifact".to_string())?.sha256.clone(),
+            model_identity: runtime.transcript_model_identity.clone(),
+            worker_runtime_identity: runtime.worker_executable_sha256.clone(),
+            enqueued_at_epoch_seconds: now_epoch_seconds(),
+        };
+        queue.enqueue(request).map_err(|error| error.to_string())?;
+    }
+    queue.discover().map_err(|error| error.to_string())
+}
+
+fn queue_item_is_repairable(
+    item: &local_meeting_notes_session_core::transcription_queue::TranscriptionQueueItem,
+) -> bool {
+    item.terminal.is_none() && item.result.is_some() && item.commit.is_none()
+}
+
+fn queue_item_is_eligible(
+    item: &local_meeting_notes_session_core::transcription_queue::TranscriptionQueueItem,
+) -> bool {
+    item.terminal.is_none()
+        && item.result.is_none()
+        && item.commit.is_none()
+        && item.claim.is_none()
+}
+
+fn stop_transcription_queue_executor(state: &ApplicationState) {
+    let control = state
+        .transcription_executor
+        .lock()
+        .expect("transcription executor lock")
+        .take();
+    if let Some(control) = control {
+        control.stop.store(true, Ordering::SeqCst);
+        if control.handle.join().is_err() {
+            write_diagnostic(
+                state,
+                "transcription_executor_join_failed",
+                "background transcription executor did not stop cleanly",
+            );
+        }
+    }
 }
 
 fn record_transcription_heartbeat(
@@ -8528,11 +8866,17 @@ mod tests {
             source: library_reader::RetainedAudioSource::Microphone,
         });
 
-        assert_eq!(execute_scheduled_retention(&state, &storage, 1).unwrap(), None);
+        assert_eq!(
+            execute_scheduled_retention(&state, &storage, 1).unwrap(),
+            None
+        );
         assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
         assert!(directory.join("capture/mic.wav").exists());
         assert!(directory.join("capture/system.wav").exists());
-        assert_eq!(load_meeting(&directory).unwrap().retention.state, AudioState::Retained);
+        assert_eq!(
+            load_meeting(&directory).unwrap().retention.state,
+            AudioState::Retained
+        );
 
         stop_owned_audio_playback(&state);
         assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
@@ -8763,6 +9107,7 @@ mod tests {
             admission: "internal-alpha".into(),
             worker_build_sha256: "worker-build".into(),
             worker_executable_sha256: "worker-executable".into(),
+            transcript_model_identity: "model/v1".into(),
             tap_build_sha256: "tap-build".into(),
             tap_path: PathBuf::from("/nonexistent/tap"),
             packaged_models: Vec::new(),
@@ -8947,6 +9292,7 @@ mod tests {
             admission: "internal-alpha".into(),
             worker_build_sha256: "worker-build".into(),
             worker_executable_sha256: "worker-executable".into(),
+            transcript_model_identity: "model/v1".into(),
             tap_build_sha256: "tap-build".into(),
             tap_path: PathBuf::from("/nonexistent/tap"),
             packaged_models: Vec::new(),
@@ -9103,6 +9449,7 @@ mod tests {
             admission: "internal-alpha".into(),
             worker_build_sha256: "worker-build".into(),
             worker_executable_sha256: "worker-executable".into(),
+            transcript_model_identity: "model/v1".into(),
             tap_build_sha256: "tap-build".into(),
             tap_path: PathBuf::from("/nonexistent/tap"),
             packaged_models: Vec::new(),
@@ -10980,6 +11327,71 @@ mod tests {
                 .transcription_last_worker_heartbeat_at_epoch_seconds
                 .is_some()
         );
+    }
+
+    #[test]
+    fn durable_queue_release_moves_stopping_capture_through_captured_to_idle() {
+        let mut model = AppModel::default();
+        transition_capture(&mut model, CaptureState::Arming).unwrap();
+        transition_capture(&mut model, CaptureState::Recording).unwrap();
+        transition_capture(&mut model, CaptureState::Stopping).unwrap();
+        transition_capture(&mut model, CaptureState::Captured).unwrap();
+        transition_capture(&mut model, CaptureState::Idle).unwrap();
+        assert_eq!(model.reducer.capture(), CaptureState::Idle);
+    }
+
+    #[test]
+    fn queue_recovery_selection_repairs_results_but_skips_terminal_items() {
+        use local_meeting_notes_session_core::transcription_queue::{
+            TranscriptionQueueItem, TranscriptionRequestSchema, TranscriptionResult,
+            TranscriptionResultSchema, TranscriptionTerminal, TranscriptionTerminalKind,
+            TranscriptionTerminalSchema,
+        };
+        let request = TranscriptionRequest {
+            schema: TranscriptionRequestSchema::V1,
+            request_id: Uuid::new_v4(),
+            meeting_id: Uuid::new_v4().to_string(),
+            capture_session_sha256: "a".repeat(64),
+            microphone_audio_sha256: "b".repeat(64),
+            system_audio_sha256: "c".repeat(64),
+            model_identity: "model/v1".into(),
+            worker_runtime_identity: "runtime/v1".into(),
+            enqueued_at_epoch_seconds: 1,
+        };
+        let result = TranscriptionResult {
+            schema: TranscriptionResultSchema::V1,
+            request_id: request.request_id,
+            meeting_id: request.meeting_id.clone(),
+            transcript: ArtifactRef {
+                relative_path: "transcript/test.json".into(),
+                sha256: "d".repeat(64),
+            },
+            result_sha256: "e".repeat(64),
+            produced_at_epoch_seconds: 2,
+        };
+        let repairable = TranscriptionQueueItem {
+            request: request.clone(),
+            claim: None,
+            result: Some(result),
+            terminal: None,
+            commit: None,
+        };
+        assert!(queue_item_is_repairable(&repairable));
+        assert!(!queue_item_is_eligible(&repairable));
+        let quarantined = TranscriptionQueueItem {
+            request,
+            claim: None,
+            result: Some(repairable.result.clone().unwrap()),
+            terminal: Some(TranscriptionTerminal {
+                schema: TranscriptionTerminalSchema::V1,
+                request_id: repairable.request.request_id,
+                kind: TranscriptionTerminalKind::Quarantined,
+                at_epoch_seconds: 3,
+            }),
+            commit: None,
+        };
+        assert!(!queue_item_is_repairable(&quarantined));
+        assert!(!queue_item_is_eligible(&quarantined));
     }
 
     fn view_current_transcript_resolves_with_restored_turn_visible() {
